@@ -52,14 +52,22 @@ def read_and_write_as_hdf(path=work_david):
     return df
 
 
-def build_directed_graph(df, year=2000, level='district', plot=True):
+def build_directed_graph(df, year=2000, level='district',
+                         weight_col='Percent-migrants', plot=True):
     import networkx as nx
+    import numpy as np
+    print('Building directed graph with {} hirerchy level'.format(level))
     source = level_dict.get(level)['source']
     target = level_dict.get(level)['target']
     df = df[df['Year'] == year]
+    df = df.dropna()
+#    if weight_col is not None:
+#        df['weights'] = normalize(df[weight_col], 1, 10)
+#    else:
+#        df['weights'] = np.ones(len(df))
     # df = df[df['Percent-migrants'] != 0]
     G = nx.from_pandas_edgelist(
-        df.dropna(),
+        df,
         source=source,
         target=target,
         edge_attr=[
@@ -72,9 +80,54 @@ def build_directed_graph(df, year=2000, level='district', plot=True):
             'Angle'],
         create_using=nx.DiGraph())
     G.graph['year'] = year
+#    if weight_col is not None:
+#        print('adding {} as weights'.format(weight_col))
+#        # add weights:
+#        edgelist = [x for x in nx.to_edgelist(G)]
+#        weighted_edges = [
+#            (edgelist[x][0],
+#             edgelist[x][1],
+#             edgelist[x][2][weight_col]) for x in range(
+#                len(edgelist))]
+#        G.add_weighted_edges_from(weighted_edges)
+    print(nx.info(G))
+    G, metdf = calculate_metrics(G, weight_col=weight_col)
     if plot:
         plot_network(G, df, year, level)
     return G
+
+
+def calculate_metrics(G, sort='degree', weight_col='Percent-migrants'):
+    import networkx as nx
+    import pandas as pd
+    metrics = {'density': nx.density(G),
+               'triadic_closure': nx.transitivity(G)}
+    degree_dict = dict(G.degree(G.nodes(), weight=weight_col))
+    nx.set_node_attributes(G, degree_dict, 'degree')
+    betweenness_dict = nx.betweenness_centrality(
+        G, weight=weight_col)  # Run betweenness centrality
+    eigenvector_dict = nx.eigenvector_centrality(
+        G, weight=weight_col)  # Run eigenvector centrality
+    # Assign each to an attribute in your network
+    nx.set_node_attributes(G, betweenness_dict, 'betweenness')
+    nx.set_node_attributes(G, eigenvector_dict, 'eigenvector')
+    G.graph.update(metrics)
+    nodes = [x for x in G.nodes]
+    metdf = pd.DataFrame([x for x in betweenness_dict.values()], index=nodes,
+                          columns=['betweenness'])
+    metdf['eigenvector'] = [x for x in eigenvector_dict.values()]
+    metdf['degree'] = [x for x in degree_dict.values()]
+    if sort is not None:
+        metdf = metdf.sort_values(sort, ascending=False)
+    return G, metdf
+
+
+#def show_metrics(G, metric='degree', top=20):
+#    from operator import itemgetter
+#    nodes = [x for x in G.nodes]
+#    metrics = [G.nodes[x][metric] for x in nodes]
+#    met_dict = dict(zip(nodes, metrics))
+#    sorted_metrics = sorted(met_dict.items(), key=itemgetter(1), reverse=True)
 
 
 def plot_network(G, df, year=2000, level='district'):
@@ -134,8 +187,8 @@ def calculate_node_size_per_year(df, year=2000, level='district',
     return size_dict
 
 
-df=pd.read_hdf(work_david /
-        'Migration_data_IL.hdf')
+df = pd.read_hdf(work_david /
+                 'Migration_data_IL.hdf')
 G = build_directed_graph(df, year=2000, level='county')
 
 #G = nx.from_pandas_edgelist(
