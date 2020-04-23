@@ -2,13 +2,24 @@
 # -*- coding: utf-8 -*-
 """
 Created on Mon Mar 30 20:03:54 2020
-
+Directions for network proccessing:
+    1) run read_and_write_as_hdf(path=path to your Place-to-place migration-IL.xlsb)
+    2) use df returned from 1) or run df=pd.read_hdf(path from 1 /
+#                                                   'Migration_data_IL.hdf')
+    3) run G = build_directed_graph(df, year, level, return_json)
+    year can be any number from 2000 to 2017 or a list with two values (e.g., [2000, 2005])
+    level can be :'district', 'county' or 'city',
+    you can also use return_json=True in order to export the G networkx object
+    into JSON.
+    4) if you want, use cent_df= centrality_analysis(G, weight_col) to 
+    create centrality indicies with ot without weights (e.g., weight='Percent-migrants')
+    5) there is a plot_network function, but it is for the district, county level
+    (the city level works though the outcome is not that nice)
 @author: shlomi
 """
-
+# TODO: add weight selection with what david wanted
+# TODO: add docstrings
 from MA_paths import work_david
-import pandas as pd
-import matplotlib.pyplot as plt
 
 level_dict = {
     'district': {'source': 'OutDistrict', 'target': 'InDistrict'},
@@ -17,58 +28,102 @@ level_dict = {
 }
 
 
-def normalize(arr, lower=0.2, upper=10):
+def array_scale(arr, lower=0.2, upper=10):
+    """scales arr to be between lower and upper"""
     import numpy as np
     arr = np.array(arr)
     maxi = arr.max()
     mini = arr.min()
     data = (((arr-mini)*(upper-lower))/(maxi-mini))+lower
     return data
-
-
-def bin_data(arr, bins=None):
-    from scipy import stats
-    import numpy as np
-    if bins is None:
-        bins = np.linspace(10,100,10)
-    ranked = stats.rankdata(np.array(arr))
-    data_percentile = ranked / len(arr) * 100
-    data_binned_indices = np.digitize(data_percentile, bins, right=True)
-    return data_binned_indices
+#
+#
+#def bin_data(arr, bins=None):
+#    from scipy import stats
+#    import numpy as np
+#    if bins is None:
+#        bins = np.linspace(10,100,10)
+#    ranked = stats.rankdata(np.array(arr))
+#    data_percentile = ranked / len(arr) * 100
+#    data_binned_indices = np.digitize(data_percentile, bins, right=True)
+#    return data_binned_indices
 
 
 def read_and_write_as_hdf(path=work_david):
+    """reads David's original binary excell file and writes a pandas HDF file,
+    path is the same for reading and writing"""
     import pandas as pd
     df = pd.read_excel(
             work_david /
             'Place-to-place migration-IL.xlsb',
             engine='pyxlsb')
+    print('found naming error...fixing.')
+    df = df.rename({'OuLAT': 'OutLAT'}, axis=1)
+    filename = 'Migration_data_IL.hdf'
+    print('saving {} as HDF file to {}'.format(filename, work_david))
     df.to_hdf(
         work_david /
-        'Migration_data_IL.hdf',
+        filename,
         complevel=9,
         mode='w',
         key='migration')
     return df
 
 
-def build_directed_graph(df, year=2000, level='district',
-                         weight_col='Percent-migrants', plot=True):
+def choose_year(df, year=2000, dropna=True, verbose=True):
+    """return a pandas DataFrame with the selected years.
+    Input:  df : original big pandas DataFrame,
+            year : either 1 values or two values (start, end)
+            dropna : drop NaN's
+            verbose : verbosity
+    Output: sliced df"""
+    if dropna:
+        df = df.dropna()
+    df = df[df['Year'] != 'ALL']
+    if isinstance(year, int) or isinstance(year, str):
+        sliced_df = df.query('Year=={}'.format(year), engine='python')
+    else:
+        if len(year) == 2:
+            cyear_min = int(year[0])
+            cyear_max = int(year[1])
+            if cyear_min > cyear_max:
+                raise('chosen minimum year is later than maximum year!')
+            sliced_df = df.query('Year>={} & Year<={}'.format(cyear_min, cyear_max), engine='python')
+        else:
+            raise('year should be with length 2!')
+    minyear = sliced_df['Year'].unique().astype(int).min()
+    maxyear = sliced_df['Year'].unique().astype(int).max()
+    if minyear == maxyear:
+        if verbose:
+            print('chosen year {}'.format(minyear))
+    else:
+        if verbose:
+            print('chosen years {}-{}'.format(minyear, maxyear))
+    return sliced_df
+
+
+def build_directed_graph(df, year=2000, level='district', return_json=False):
     import networkx as nx
-    import numpy as np
-    print('Building directed graph with {} hirerchy level'.format(level))
+    """Build a directed graph with a specific level hierarchy and year/s.
+    Input:  df: original pandas DataFrame
+            year: selected year/s
+            level: district, county or city
+            return_json: convert networkx DiGraph object toJSON object and
+            return it.
+    Output: G: networkx DiGraph object or JSON object"""
+    print('Building directed graph with {} hierarchy level'.format(level))
     source = level_dict.get(level)['source']
     target = level_dict.get(level)['target']
-    df = df[df['Year'] == year]
-    df = df.dropna()
+    df_sliced = choose_year(df, year=year, dropna=True)
     node_sizes = node_sizes_source_target(df, year=year, level=level)
+    node_geo = get_lat_lon_from_df_per_year(df, year=year, level=level)
 #    if weight_col is not None:
 #        df['weights'] = normalize(df[weight_col], 1, 10)
 #    else:
 #        df['weights'] = np.ones(len(df))
     # df = df[df['Percent-migrants'] != 0]
     G = nx.from_pandas_edgelist(
-        df,
+        df_sliced,
         source=source,
         target=target,
         edge_attr=[
@@ -81,6 +136,7 @@ def build_directed_graph(df, year=2000, level='district',
             'Angle'],
         create_using=nx.DiGraph())
     nx.set_node_attributes(G, node_sizes, 'size')
+    nx.set_node_attributes(G, node_geo, 'coords_lat_lon')
     G.name = 'Israeli migration network'
     G.graph['level'] = level
     G.graph['year'] = year
@@ -102,13 +158,20 @@ def build_directed_graph(df, year=2000, level='district',
     for key, val in G.graph.items():
         print(key + ' :', val)
     # G, metdf = calculate_metrics(G, weight_col=weight_col)
-    if plot:
-        plot_network(G, edge_width=weight_col)
-    return G
+    if return_json:
+        return nx.node_link_data(G)
+    else:
+        return G
 
 
-def convert_centrality_to_series(G, centrality='in_degree',
-                                 weight_col='Percent-migrants'):
+def calculate_centrality_to_dataframe(G, centrality='in_degree',
+                                      weight_col='Percent-migrants'):
+    """create centrality indicies for directed graph G.
+    Input: G: networkx DiGraph object
+           centrality: type of centrality test to preform
+           weight_col: apply weights that should exist in G.edges attributes
+           choose None to run without weights
+    Output: pandas DataFrame with centrality as columns and nodes as index."""
     import pandas as pd
     import networkx as nx
     print('preforming {} centrality analysis'.format(centrality))
@@ -142,21 +205,26 @@ def convert_centrality_to_series(G, centrality='in_degree',
 
 
 def centrality_analysis(G, weight_col='Percent-migrants'):
-    df = convert_centrality_to_series(G, 'in_degree', weight_col=weight_col)
-    df['out_degree'] = convert_centrality_to_series(
+    """main function to run centrality analysis.
+    Input: G: networkx DiGraph object
+           weight_col: apply weights that should exist in G.edges attributes
+           choose None to run without weights
+    Output: pandas DataFrame with centrality as columns and nodes as index."""
+    df = calculate_centrality_to_dataframe(G, 'in_degree', weight_col=weight_col)
+    df['out_degree'] = calculate_centrality_to_dataframe(
         G, 'out_degree', weight_col=weight_col)
-    df['degree'] = convert_centrality_to_series(
+    df['degree'] = calculate_centrality_to_dataframe(
         G, 'degree', weight_col=weight_col)
-    df['eigenvector'] = convert_centrality_to_series(
+    df['eigenvector'] = calculate_centrality_to_dataframe(
         G, 'eigenvector', weight_col=weight_col)
-    df['closeness'] = convert_centrality_to_series(
+    df['closeness'] = calculate_centrality_to_dataframe(
         G, 'closeness', weight_col=weight_col)
-    df['betweenness'] = convert_centrality_to_series(
+    df['betweenness'] = calculate_centrality_to_dataframe(
         G, 'betweenness', weight_col=weight_col)
-    df['load'] = convert_centrality_to_series(G, 'load', weight_col=weight_col)
-    df['harmonic'] = convert_centrality_to_series(
+    df['load'] = calculate_centrality_to_dataframe(G, 'load', weight_col=weight_col)
+    df['harmonic'] = calculate_centrality_to_dataframe(
         G, 'harmonic', weight_col=weight_col)
-    df['clustering'] = convert_centrality_to_series(
+    df['clustering'] = calculate_centrality_to_dataframe(
         G, 'clustering', weight_col=weight_col)
     return df
 
@@ -233,7 +301,7 @@ def plot_network(G, edge_width='Percent-migrants'):
             edges=G.edges,
             edge_color=edges_colors,
             node_color=node_colors,
-            node_cmap=None, width=normalize(weights))
+            node_cmap=None, width=array_scale(weights))
     fig.suptitle('Migration network for year {}'.format(G.graph['year']))
     return ax
 
@@ -249,7 +317,7 @@ def node_sizes_source_target(df, year=2000, level='district'):
 
 def calculate_node_size_per_year(df, year=2000, level='district',
                                  direction='outflow'):
-    df = df[df['Year'] == year].dropna()
+    df = choose_year(df, year=year, verbose=False)
     # df = df[df['Direction'] == direction]
     if direction == 'outflow':
         prefix = level_dict.get(level)['source']
@@ -270,8 +338,45 @@ def calculate_node_size_per_year(df, year=2000, level='district',
     return size_dict
 
 
+def get_lat_lon_from_df_per_year(df, year=2000, level='district'):
+    geo_in = get_lat_lon_per_year(
+        df, year=year, level=level, direction='inflow')
+    geo_out = get_lat_lon_per_year(
+        df, year=year, level=level, direction='outflow')
+    geo_node = {**geo_in, **geo_out}
+    return geo_node
+
+
+def get_lat_lon_per_year(df, year=2000, level='district',
+                         direction='outflow'):
+    import numpy as np
+    df = choose_year(df, year=year, verbose=False)
+    # df = df[df['Direction'] == direction]
+    if direction == 'outflow':
+        prefix = level_dict.get(level)['source']
+    elif direction == 'inflow':
+        prefix = level_dict.get(level)['target']
+    nodes = df[prefix].unique()
+    node_list = []
+    for node in nodes:
+        dfc = df[df[prefix] == node]
+        # dfc = dfc[dfc['Percent-migrants'] != 0]
+        if direction == 'outflow':
+            lon = np.mean(dfc['OutLON'].value_counts().index)
+            lat = np.mean(dfc['OutLAT'].value_counts().index)
+        elif direction == 'inflow':
+            lon = np.mean(dfc['InLON'].value_counts().index)
+            lat = np.mean(dfc['InLAT'].value_counts().index)
+        #size =  (dfc['Number'].div((dfc['Percent-migrants']))).sum()
+        node_list.append([lat, lon])
+    geo_dict = dict(zip(nodes, node_list))
+    return geo_dict
+
+
 #df = pd.read_hdf(work_david /
 #                 'Migration_data_IL.hdf')
 #G = build_directed_graph(df, year=2000, level='county')
+
+
 
 
