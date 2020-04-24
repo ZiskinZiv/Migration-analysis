@@ -89,8 +89,11 @@ def choose_year(df, year=2000, dropna=True, verbose=True):
             if cyear_min > cyear_max:
                 raise('chosen minimum year is later than maximum year!')
             sliced_df = df.query('Year>={} & Year<={}'.format(cyear_min, cyear_max), engine='python')
+        elif len(year) == 1:
+            year = year[0]
+            sliced_df = df.query('Year=={}'.format(year), engine='python')
         else:
-            raise('year should be with length 2!')
+            raise('if year is list it should be with length 2!')
     minyear = sliced_df['Year'].unique().astype(int).min()
     maxyear = sliced_df['Year'].unique().astype(int).max()
     if minyear == maxyear:
@@ -102,8 +105,10 @@ def choose_year(df, year=2000, dropna=True, verbose=True):
     return sliced_df
 
 
-def build_directed_graph(df, year=2000, level='district', return_json=False):
+def build_directed_graph(df, year=2000, level='district',
+                         graph_type='multi-directed',return_json=False):
     import networkx as nx
+    from networkx import NetworkXNotImplemented
     """Build a directed graph with a specific level hierarchy and year/s.
     Input:  df: original pandas DataFrame
             year: selected year/s
@@ -111,7 +116,13 @@ def build_directed_graph(df, year=2000, level='district', return_json=False):
             return_json: convert networkx DiGraph object toJSON object and
             return it.
     Output: G: networkx DiGraph object or JSON object"""
-    print('Building directed graph with {} hierarchy level'.format(level))
+    if graph_type == 'directed':
+        Graph = nx.DiGraph()
+    elif graph_type == 'multi-directed':
+        Graph = nx.MultiDiGraph()
+    else:
+        raise("Only 'directed' and 'multi-directed' graph_type are allowed!")
+    print('Building {} graph with {} hierarchy level'.format(graph_type, level))
     source = level_dict.get(level)['source']
     target = level_dict.get(level)['target']
     df_sliced = choose_year(df, year=year, dropna=True)
@@ -134,14 +145,17 @@ def build_directed_graph(df, year=2000, level='district', return_json=False):
             'Total',
             'Distance',
             'Angle'],
-        create_using=nx.DiGraph())
+        create_using=Graph)
     nx.set_node_attributes(G, node_sizes, 'size')
     nx.set_node_attributes(G, node_geo, 'coords_lat_lon')
     G.name = 'Israeli migration network'
     G.graph['level'] = level
     G.graph['year'] = year
     G.graph['density'] = nx.density(G)
-    G.graph['triadic_closure'] = nx.transitivity(G)
+    try:
+        G.graph['triadic_closure'] = nx.transitivity(G)
+    except NetworkXNotImplemented as e:
+        print('nx.transitivity {}'.format(e))
     # G.graph['global_reaching_centrality'] = nx.global_reaching_centrality(G, weight=weight_col)
     # G.graph['average_clustering'] = nx.average_clustering(G, weight=weight_col)
 #    if weight_col is not None:
@@ -210,22 +224,32 @@ def centrality_analysis(G, weight_col='Percent-migrants'):
            weight_col: apply weights that should exist in G.edges attributes
            choose None to run without weights
     Output: pandas DataFrame with centrality as columns and nodes as index."""
+    from networkx import NetworkXNotImplemented
     df = calculate_centrality_to_dataframe(G, 'in_degree', weight_col=weight_col)
     df['out_degree'] = calculate_centrality_to_dataframe(
         G, 'out_degree', weight_col=weight_col)
     df['degree'] = calculate_centrality_to_dataframe(
         G, 'degree', weight_col=weight_col)
-    df['eigenvector'] = calculate_centrality_to_dataframe(
-        G, 'eigenvector', weight_col=weight_col)
+    try:
+        df['eigenvector'] = calculate_centrality_to_dataframe(
+                G, 'eigenvector', weight_col=weight_col)
+    except NetworkXNotImplemented as e:
+        print('nx.eigenvector_centrality {}'.format(e))
     df['closeness'] = calculate_centrality_to_dataframe(
         G, 'closeness', weight_col=weight_col)
-    df['betweenness'] = calculate_centrality_to_dataframe(
-        G, 'betweenness', weight_col=weight_col)
+    try:
+        df['betweenness'] = calculate_centrality_to_dataframe(
+                G, 'betweenness', weight_col=weight_col)
+    except NetworkXNotImplemented as e:
+        print('nx.betweenness_centrality {}'.format(e))
     df['load'] = calculate_centrality_to_dataframe(G, 'load', weight_col=weight_col)
     df['harmonic'] = calculate_centrality_to_dataframe(
         G, 'harmonic', weight_col=weight_col)
-    df['clustering'] = calculate_centrality_to_dataframe(
-        G, 'clustering', weight_col=weight_col)
+    try:
+        df['clustering'] = calculate_centrality_to_dataframe(
+                G, 'clustering', weight_col=weight_col)
+    except NetworkXNotImplemented as e:
+        print('nx.clustering {}'.format(e))
     return df
 
 
