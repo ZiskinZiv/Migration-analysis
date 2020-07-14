@@ -106,7 +106,7 @@ def choose_year(df, year=2000, dropna=True, verbose=True):
 
 
 def build_directed_graph(df, year=2000, level='district',
-                         graph_type='multi-directed',return_json=False):
+                         graph_type='multi-directed', return_json=False):
     import networkx as nx
     from networkx import NetworkXNotImplemented
     """Build a directed graph with a specific level hierarchy and year/s.
