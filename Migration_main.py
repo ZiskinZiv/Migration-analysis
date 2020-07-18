@@ -28,6 +28,51 @@ level_dict = {
 }
 
 
+def create_G_with_df(df, level='city', graph_type='directed'):
+    import networkx as nx
+
+    def feed_edges_attrs_to_G(dfs, degree='in'):
+        # first add edges from out to in:
+        if degree == 'out':
+            s = [x for x in dfs[source]]
+            t = [x for x in dfs[target]]
+        elif degree == 'in':
+            s = [x for x in dfs[target]]
+            t = [x for x in dfs[source]]
+        # outpop = [x for x in out_df['OutPop']]
+        number = [x for x in dfs['Number']]
+        total = [x for x in dfs['Total']]
+        pmigrants = [x for x in dfs['Percent-migrants']]
+        outpercent = [x for x in dfs['Outpercent']]
+        attrs = []
+        for num, tot, pmig, outp in zip(number, total, pmigrants, outpercent):
+            attrs.append(dict(number=num, total=tot, percent_migrants=pmig,
+                              outpercent=outp))
+        for sour, targ, attr in zip(s, t, attrs):
+            G.add_edge(sour, targ, **attr)
+        return G
+
+    # build graph with graph type:
+    if graph_type == 'directed':
+        G = nx.DiGraph()
+    elif graph_type == 'multi-directed':
+        G = nx.MultiDiGraph()
+    else:
+        raise("Only 'directed' and 'multi-directed' graph_type are allowed!")
+    # get hirarchy:
+    source = level_dict.get(level)['source']
+    target = level_dict.get(level)['target']
+    # get nodes:
+    nodes = [x for x in set(df[source]).union(set(df[target]))]
+    G.add_nodes_from(nodes)
+    # seperate in/out dfs:
+    in_df = df[df['Direction'] == 'inflow']
+    out_df = df[df['Direction'] == 'outflow']
+    G = feed_edges_attrs_to_G(out_df, degree='out')
+    G = feed_edges_attrs_to_G(in_df, degree='in')
+    return G
+
+
 def array_scale(arr, lower=0.2, upper=10):
     """scales arr to be between lower and upper"""
     import numpy as np
@@ -106,7 +151,7 @@ def choose_year(df, year=2000, dropna=True, verbose=True):
 
 
 def build_directed_graph(df, year=2000, level='district',
-                         graph_type='multi-directed', return_json=False):
+                         graph_type='directed', return_json=False):
     import networkx as nx
     from networkx import NetworkXNotImplemented
     """Build a directed graph with a specific level hierarchy and year/s.
@@ -116,15 +161,9 @@ def build_directed_graph(df, year=2000, level='district',
             return_json: convert networkx DiGraph object toJSON object and
             return it.
     Output: G: networkx DiGraph object or JSON object"""
-    if graph_type == 'directed':
-        Graph = nx.DiGraph()
-    elif graph_type == 'multi-directed':
-        Graph = nx.MultiDiGraph()
-    else:
-        raise("Only 'directed' and 'multi-directed' graph_type are allowed!")
     print('Building {} graph with {} hierarchy level'.format(graph_type, level))
-    source = level_dict.get(level)['source']
-    target = level_dict.get(level)['target']
+#    source = level_dict.get(level)['source']
+#    target = level_dict.get(level)['target']
     df_sliced = choose_year(df, year=year, dropna=True)
     node_sizes = node_sizes_source_target(df, year=year, level=level)
     node_geo = get_lat_lon_from_df_per_year(df, year=year, level=level)
@@ -133,19 +172,20 @@ def build_directed_graph(df, year=2000, level='district',
 #    else:
 #        df['weights'] = np.ones(len(df))
     # df = df[df['Percent-migrants'] != 0]
-    G = nx.from_pandas_edgelist(
-        df_sliced,
-        source=source,
-        target=target,
-        edge_attr=[
-            source,
-            'Percent-migrants',
-            'Direction',
-            'Number',
-            'Total',
-            'Distance',
-            'Angle'],
-        create_using=Graph)
+    G = create_G_with_df(df_sliced, level=level, graph_type=graph_type)
+#    G = nx.from_pandas_edgelist(
+#        df_sliced,
+#        source=source,
+#        target=target,
+#        edge_attr=[
+#            source,
+#            'Percent-migrants',
+#            'Direction',
+#            'Number',
+#            'Total',
+#            'Distance',
+#            'Angle'],
+#        create_using=Graph)
     nx.set_node_attributes(G, node_sizes, 'size')
     nx.set_node_attributes(G, node_geo, 'coords_lat_lon')
     G.name = 'Israeli migration network'
@@ -218,13 +258,14 @@ def calculate_centrality_to_dataframe(G, centrality='in_degree',
     return df
 
 
-def centrality_analysis(G, weight_col='Percent-migrants'):
+def centrality_analysis(G, weight_col='percent_migrants'):
     """main function to run centrality analysis.
     Input: G: networkx DiGraph object
            weight_col: apply weights that should exist in G.edges attributes
            choose None to run without weights
     Output: pandas DataFrame with centrality as columns and nodes as index."""
     from networkx import NetworkXNotImplemented
+    print('Weight chosen: {}'.format(weight_col))
     df = calculate_centrality_to_dataframe(G, 'in_degree', weight_col=weight_col)
     df['out_degree'] = calculate_centrality_to_dataframe(
         G, 'out_degree', weight_col=weight_col)
@@ -302,7 +343,7 @@ def power_law_fit_and_plot(cent_df, col='in_degree'):
 #    sorted_metrics = sorted(met_dict.items(), key=itemgetter(1), reverse=True)
 
 
-def plot_network(G, edge_width='Percent-migrants'):
+def plot_network(G, edge_width='percent_migrants'):
     import matplotlib.pyplot as plt
     import networkx as nx
     # nodedict = node_sizes_source_target(df, year=year, level=level)
@@ -315,8 +356,9 @@ def plot_network(G, edge_width='Percent-migrants'):
     node_colors = [node_cmap(x) for x in range(len(full_nodes))]
     nodecolors_dict = dict(zip(full_nodes, node_colors))
     source = level_dict.get(G.graph['level'])['source']
-    edges_data = [G[u][v][source] for u, v in G.edges]
-    edges_colors = [nodecolors_dict.get(x) for x in edges_data]
+#    edges_data = [G[u][v][source] for u, v in G.edges]
+    nodes_source = list(set([(u) for u, v in G.edges]))
+    edges_colors = [nodecolors_dict.get(x) for x in nodes_source]
     weights = [G[u][v][edge_width] for u, v in G.edges]
     pos = nx.spring_layout(G)
     nx.draw(G, pos, ax=ax, nodelist=full_nodes,
