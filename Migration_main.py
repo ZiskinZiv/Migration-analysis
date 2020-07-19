@@ -24,7 +24,7 @@ from MA_paths import work_david
 level_dict = {
     'district': {'source': 'OutDistrict', 'target': 'InDistrict'},
     'county': {'source': 'OutCounty', 'target': 'InCounty'},
-    'city': {'source': 'OutEN', 'target': 'InEN'}
+    'city': {'source': 'OutID', 'target': 'InID'}
 }
 
 
@@ -62,13 +62,16 @@ def create_G_with_df(df, level='city', graph_type='directed'):
     # get hirarchy:
     source = level_dict.get(level)['source']
     target = level_dict.get(level)['target']
+    # select only inflow:
+    in_df = df[df['Direction'] == 'inflow']
     # get nodes:
-    nodes = [x for x in set(df[source]).union(set(df[target]))]
+    nodes = [x for x in in_df[target].unique()] + \
+        [x for x in in_df[source].unique()]
+    nodes = list(set(nodes))
     G.add_nodes_from(nodes)
     # seperate in/out dfs:
-    in_df = df[df['Direction'] == 'inflow']
-    out_df = df[df['Direction'] == 'outflow']
-    G = feed_edges_attrs_to_G(out_df, degree='out')
+    # out_df = df[df['Direction'] == 'outflow']
+    # G = feed_edges_attrs_to_G(out_df, degree='out')
     G = feed_edges_attrs_to_G(in_df, degree='in')
     return G
 
@@ -94,6 +97,42 @@ def array_scale(arr, lower=0.2, upper=10):
 #    return data_binned_indices
 
 
+def get_out_id_greater_than_1(dfs_in, savepath=None):
+    """ask david about how to fix the lines,
+    This procedure gives the problamtic interaction of inid and out id"""
+    import pandas as pd
+#    ids_list = []
+    df_out = []
+    for in_id in dfs_in['InID']:
+        vc = dfs_in[dfs_in['InID'] == in_id]['OutID'].value_counts()
+        out_ids_ser = vc[vc > 1]
+        if out_ids_ser.any():
+            df_out.append(dfs_in[dfs_in['InID'] == in_id][dfs_in['OutID'].isin(out_ids_ser.index.to_list())])
+#            ids_list += out_ids_ser.index.tolist()
+#    return list(set(ids_list))
+    df = pd.concat(df_out)
+    df = df.drop_duplicates()
+    if savepath is not None:
+        df.to_csv(savepath / 'duplicate_migration_IL_ids.csv')
+    return df
+
+
+def read_geo_name_cities(path=work_david):
+    import pandas as pd
+    geo = pd.read_excel(
+        work_david /
+        'Place-to-place migration-IL.xlsb',
+        engine='pyxlsb', sheet_name='geo')
+    geo = geo.loc[:, 'ID':'LON']
+    geo['Rank'] = geo['Rank'].fillna(0)
+    geo['ITM-X'] = geo['ITM-X'].fillna(0)
+    geo['ITM-Y'] = geo['ITM-Y'].fillna(0)
+    geo = geo.set_index('ID2').dropna()
+    geo = geo.loc[~geo.index.duplicated(keep='first')]
+    geo['ID'] = geo['ID'].astype(int)
+    return geo
+
+
 def read_and_write_as_hdf(path=work_david):
     """reads David's original binary excell file and writes a pandas HDF file,
     path is the same for reading and writing"""
@@ -101,7 +140,7 @@ def read_and_write_as_hdf(path=work_david):
     df = pd.read_excel(
             work_david /
             'Place-to-place migration-IL.xlsb',
-            engine='pyxlsb')
+            engine='pyxlsb', sheet_name='raw')
     print('found naming error...fixing.')
     df = df.rename({'OuLAT': 'OutLAT'}, axis=1)
     filename = 'Migration_data_IL.hdf'
@@ -112,6 +151,14 @@ def read_and_write_as_hdf(path=work_david):
         complevel=9,
         mode='w',
         key='migration')
+    return df
+
+
+def load_migration_df(path=work_david, direction='inflow'):
+    import pandas as pd
+    df = pd.read_hdf(path / 'Migration_data_IL.hdf')
+    print('{} direction selected.'.format(direction))
+    df = df[df['Direction'] == direction]
     return df
 
 
@@ -150,7 +197,7 @@ def choose_year(df, year=2000, dropna=True, verbose=True):
     return sliced_df
 
 
-def build_directed_graph(df, year=2000, level='district',
+def build_directed_graph(df, path=work_david, year=2000, level='district',
                          graph_type='directed', return_json=False):
     import networkx as nx
     from networkx import NetworkXNotImplemented
@@ -166,7 +213,7 @@ def build_directed_graph(df, year=2000, level='district',
 #    target = level_dict.get(level)['target']
     df_sliced = choose_year(df, year=year, dropna=True)
     node_sizes = node_sizes_source_target(df, year=year, level=level)
-    node_geo = get_lat_lon_from_df_per_year(df, year=year, level=level)
+#    node_geo = get_lat_lon_from_df_per_year(df, year=year, level=level)
 #    if weight_col is not None:
 #        df['weights'] = normalize(df[weight_col], 1, 10)
 #    else:
@@ -186,8 +233,16 @@ def build_directed_graph(df, year=2000, level='district',
 #            'Distance',
 #            'Angle'],
 #        create_using=Graph)
+    geo = read_geo_name_cities(path=path)
+    for col in geo.columns:
+        dict_like = dict(zip([x for x in G.nodes()], [
+                         geo.loc[x, col] for x in G.nodes()]))
+        nx.set_node_attributes(G, dict_like, name=col)
+    df_in = df_sliced[df_sliced['Direction'] == 'inflow']
+    pi_dict = calculate_poplarity_index_for_InID(df_in)
+    nx.set_node_attributes(G, pi_dict, 'popularity')
     nx.set_node_attributes(G, node_sizes, 'size')
-    nx.set_node_attributes(G, node_geo, 'coords_lat_lon')
+#    nx.set_node_attributes(G, node_geo, 'coords_lat_lon')
     G.name = 'Israeli migration network'
     G.graph['level'] = level
     G.graph['year'] = year
@@ -210,12 +265,28 @@ def build_directed_graph(df, year=2000, level='district',
 #        G.add_weighted_edges_from(weighted_edges)
     print(nx.info(G))
     for key, val in G.graph.items():
-        print(key + ' :', val)
+        if isinstance(val, float):
+            print(key + ' : {:.2f}'.format(val))
+        else:
+            print(key + ' :', val)
     # G, metdf = calculate_metrics(G, weight_col=weight_col)
     if return_json:
         return nx.node_link_data(G)
     else:
         return G
+
+
+def calculate_poplarity_index_for_InID(df_in):
+    all_migrants = df_in['Number'].sum()
+    pi_key = []
+    pi_val = []
+    for inid in df_in['InID'].unique():
+        all_inid = df_in[df_in['InID'] == inid]['Number'].sum()
+        pi = (all_migrants - all_inid) / all_inid
+        pi_key.append(inid)
+        pi_val.append(pi)
+    pi_dict = dict(zip(pi_key, pi_val))
+    return pi_dict
 
 
 def calculate_centrality_to_dataframe(G, centrality='in_degree',
