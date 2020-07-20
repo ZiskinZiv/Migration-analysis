@@ -97,7 +97,7 @@ def array_scale(arr, lower=0.2, upper=10):
 #    return data_binned_indices
 
 
-def get_out_id_greater_than_1(dfs_in, savepath=None):
+def get_out_id_greater_than_1(dfs_in, year=2000, savepath=None):
     """ask david about how to fix the lines,
     This procedure gives the problamtic interaction of inid and out id"""
     import pandas as pd
@@ -110,10 +110,16 @@ def get_out_id_greater_than_1(dfs_in, savepath=None):
             df_out.append(dfs_in[dfs_in['InID'] == in_id][dfs_in['OutID'].isin(out_ids_ser.index.to_list())])
 #            ids_list += out_ids_ser.index.tolist()
 #    return list(set(ids_list))
-    df = pd.concat(df_out)
+    try:
+        df = pd.concat(df_out)
+    except ValueError:
+        print('duplicates in {} not found, skipping...'.format(year))
+        return
     df = df.drop_duplicates()
+    df.index.name = 'line_number'
     if savepath is not None:
-        df.to_csv(savepath / 'duplicate_migration_IL_ids.csv')
+        print('saving year {}'.format(year))
+        df.to_csv(savepath / 'duplicate_migration_IL_{}_ids.csv'.format(year))
     return df
 
 
@@ -169,10 +175,11 @@ def choose_year(df, year=2000, dropna=True, verbose=True):
             dropna : drop NaN's
             verbose : verbosity
     Output: sliced df"""
+    import numpy as np
     if dropna:
         df = df.dropna()
     df = df[df['Year'] != 'ALL']
-    if isinstance(year, int) or isinstance(year, str):
+    if isinstance(year, int) or isinstance(year, str) or isinstance(year, np.int64):
         sliced_df = df.query('Year=={}'.format(year), engine='python')
     else:
         if len(year) == 2:
