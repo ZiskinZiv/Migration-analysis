@@ -97,17 +97,23 @@ def array_scale(arr, lower=0.2, upper=10):
 #    return data_binned_indices
 
 
-def get_out_id_greater_than_1(dfs_in, year=2000, savepath=None):
+def get_out_id_greater_than_1(dfs_in, field='id', year=2000, savepath=None):
     """ask david about how to fix the lines,
     This procedure gives the problamtic interaction of inid and out id"""
     import pandas as pd
 #    ids_list = []
+    if field == 'id':
+        in_f = 'InID'
+        out_f = 'OutID'
+    elif field == 'name':
+        in_f = 'InEN'
+        out_f = 'OutEN'
     df_out = []
-    for in_id in dfs_in['InID']:
-        vc = dfs_in[dfs_in['InID'] == in_id]['OutID'].value_counts()
+    for in_id in dfs_in[in_f]:
+        vc = dfs_in[dfs_in[in_f] == in_id][out_f].value_counts()
         out_ids_ser = vc[vc > 1]
         if out_ids_ser.any():
-            df_out.append(dfs_in[dfs_in['InID'] == in_id][dfs_in['OutID'].isin(out_ids_ser.index.to_list())])
+            df_out.append(dfs_in[dfs_in[in_f] == in_id][dfs_in[out_f].isin(out_ids_ser.index.to_list())])
 #            ids_list += out_ids_ser.index.tolist()
 #    return list(set(ids_list))
     try:
