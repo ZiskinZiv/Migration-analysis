@@ -20,12 +20,26 @@ Directions for network proccessing:
 # TODO: add weight selection with what david wanted
 # TODO: add docstrings
 from MA_paths import work_david
+from MA_paths import savefig_path
+import matplotlib.ticker as ticker
+gis_path = work_david / 'gis'
+
+
 
 level_dict = {
     'district': {'source': 'OutDistrict', 'target': 'InDistrict'},
     'county': {'source': 'OutCounty', 'target': 'InCounty'},
     'city': {'source': 'OutID', 'target': 'InID'}
 }
+
+
+def linear_map(arr, lb=0, ub=1):
+    import numpy as np
+    dh = np.max(arr)
+    dl = np.min(arr)
+    # print dl
+    arr = (((arr - dl) * (ub - lb)) / (dh - dl)) + lb
+    return arr
 
 
 def create_G_with_df(df, level='city', graph_type='directed'):
@@ -41,12 +55,12 @@ def create_G_with_df(df, level='city', graph_type='directed'):
             t = [x for x in dfs[source]]
         # outpop = [x for x in out_df['OutPop']]
         number = [x for x in dfs['Number']]
-        total = [x for x in dfs['Total']]
+        # total = [x for x in dfs['Total']]
         pmigrants = [x for x in dfs['Percent-migrants']]
         outpercent = [x for x in dfs['Outpercent']]
         attrs = []
-        for num, tot, pmig, outp in zip(number, total, pmigrants, outpercent):
-            attrs.append(dict(number=num, total=tot, percent_migrants=pmig,
+        for num, pmig, outp in zip(number, pmigrants, outpercent):
+            attrs.append(dict(number=num, percent_migrants=pmig,
                               outpercent=outp))
         for sour, targ, attr in zip(s, t, attrs):
             G.add_edge(sour, targ, **attr)
@@ -213,6 +227,7 @@ def choose_year(df, year=2000, dropna=True, verbose=True):
 def build_directed_graph(df, path=work_david, year=2000, level='district',
                          graph_type='directed', return_json=False):
     import networkx as nx
+    import numpy as np
     from networkx import NetworkXNotImplemented
     """Build a directed graph with a specific level hierarchy and year/s.
     Input:  df: original pandas DataFrame
@@ -246,13 +261,27 @@ def build_directed_graph(df, path=work_david, year=2000, level='district',
 #            'Distance',
 #            'Angle'],
 #        create_using=Graph)
+    # enter geographical coords as node attrs:
     geo = read_geo_name_cities(path=path)
     for col in geo.columns:
         dict_like = dict(zip([x for x in G.nodes()], [
                          geo.loc[x, col] for x in G.nodes()]))
         nx.set_node_attributes(G, dict_like, name=col)
+    # slice df for just inflow:
     df_in = df_sliced[df_sliced['Direction'] == 'inflow']
+    # calculate popularity index:
     pi_dict = calculate_poplarity_index_for_InID(df_in)
+    # get the total number of immgrants to city:
+    totals = []
+    for node in [x for x in G.nodes()]:
+        valc = df_in[df_in['InID']==node]['Total'].value_counts()
+        if valc.empty:
+            totals.append(0)
+        else:
+            totals.append(valc.index[0])
+    total_dict = dict(zip([x for x in G.nodes()], totals))
+    # set some node attrs:
+    nx.set_node_attributes(G, total_dict, 'total_in')
     nx.set_node_attributes(G, pi_dict, 'popularity')
     nx.set_node_attributes(G, node_sizes, 'size')
 #    nx.set_node_attributes(G, node_geo, 'coords_lat_lon')
@@ -425,6 +454,159 @@ def power_law_fit_and_plot(cent_df, col='in_degree'):
 #    metrics = [G.nodes[x][metric] for x in nodes]
 #    met_dict = dict(zip(nodes, metrics))
 #    sorted_metrics = sorted(met_dict.items(), key=itemgetter(1), reverse=True)
+@ticker.FuncFormatter
+def lon_formatter(x, pos):
+    if x < 0:
+        return r'{0:.1f}$\degree$W'.format(abs(x))
+    elif x > 0:
+        return r'{0:.1f}$\degree$E'.format(abs(x))
+    elif x == 0:
+        return r'0$\degree$'
+
+
+@ticker.FuncFormatter
+def lat_formatter(x, pos):
+    if x < 0:
+        return r'{0:.1f}$\degree$S'.format(abs(x))
+    elif x > 0:
+        return r'{0:.1f}$\degree$N'.format(abs(x))
+    elif x == 0:
+        return r'0$\degree$'
+
+def plot_network_on_israel_map(G=None, gis_path=gis_path, fontsize=18,
+                               save=True):
+    import matplotlib.pyplot as plt
+    import cartopy.crs as ccrs
+    from cartopy.io.shapereader import Reader
+    import networkx as nx
+    import numpy as np
+    import matplotlib.ticker as mticker
+    import cartopy.feature as cfeature
+    from cartopy.mpl.ticker import (LongitudeFormatter, LatitudeFormatter,LatitudeLocator)
+    import geopandas as gpd
+#    isr_with_yosh = gpd.read_file(gis_path / 'Israel_and_Yosh.shp')
+
+    fname = gis_path / 'Israel_and_Yosh.shp'
+    east = 36
+    west = 34
+    north = 34
+    south = 29
+    fig = plt.figure(figsize=(10, 20))
+    ax = fig.add_subplot(projection=ccrs.PlateCarree())
+    ax.set_extent([west, east, south, north], crs=ccrs.PlateCarree())
+#    ax.add_geometries(Reader(fname).geometries(),
+#                      ccrs.PlateCarree(), zorder=0,
+#                      edgecolor='k', facecolor='w')
+    # Put a background image on for nice sea rendering.
+
+    ax.add_feature(cfeature.LAND.with_scale('10m'))
+    ax.add_feature(cfeature.COASTLINE.with_scale('10m'))
+    ax.add_feature(cfeature.OCEAN.with_scale('10m'))
+    ax.add_feature(cfeature.LAKES.with_scale('10m'))
+    ax.add_feature(cfeature.BORDERS.with_scale('10m'))
+#    fig, ax = plt.subplots(figsize=(7, 20))
+#    ax = isr_with_yosh.plot(ax=ax)
+#    ax.xaxis.set_major_locator(mticker.MaxNLocator(2))
+#    ax.yaxis.set_major_locator(mticker.MaxNLocator(5))
+#    ax.yaxis.set_major_formatter(lat_formatter)
+#    ax.xaxis.set_major_formatter(lon_formatter)
+#    ax.tick_params(top=True, bottom=True, left=True, right=True,
+#                   direction='out', labelsize=ticklabelsize)
+
+    deg = nx.degree(G)
+    labels = {node: node if deg[node] >= 200 else ''
+              for node in G.nodes}
+    pos = {key:(value['LON'], value['LAT']) for (key,value) in G.nodes().items()}
+    pop_sizes = np.array([G.nodes()[x]['size'] for x in G.nodes()])
+    pop_sizes = linear_map(pop_sizes, 10, 50)
+    popularity = np.array([G.nodes()[x].get('popularity', 0) for x in G.nodes()])
+    popularity = linear_map(popularity, 0, 100)
+    total = np.array([G.nodes()[x].get('total_in', 0) for x in G.nodes()])
+    total_width = linear_map(total, 0.1, 5)
+    number = np.array([G.edges()[x].get('number', 0) for x in G.edges()])
+    bins = [0, 250, 500, 1000, 2500]
+    subgraphs = get_subgraph_list(G, attr={'edge': 'number'}, bins=bins)
+    evenly_spaced_interval = np.linspace(0, 1, len(bins))
+    colors = [plt.cm.gist_rainbow(x) for x in evenly_spaced_interval]
+    widths = np.linspace(0.045, 4, len(bins))
+    for i, subgraph in enumerate(subgraphs):
+        pos = {key:(value['LON'], value['LAT']) for (key,value) in subgraph.nodes().items()}
+        nx.draw_networkx_edges(subgraph, ax=ax, pos=pos, alpha=1.0, width=widths[i],
+                               edge_color=colors[i], arrows=False, edge_cmap=None)
+    leg_labels = get_bins_legend(bins)
+    leg = plt.legend(leg_labels, loc='upper left', fontsize=fontsize)
+    leg.set_title('Number of immegrants',prop={'size': fontsize-2})
+    # ec = nx.draw_networkx_edges(G, ax=ax, pos=pos, alpha=0.5, width=total_width,
+    #                             edge_color='k', arrows=False, edge_cmap=plt.cm.plasma)
+    # nc = nx.draw_networkx_nodes(G, ax=ax, pos=pos, nodelist=G.nodes(),
+    #                             node_size=pop_sizes, node_color=total,
+    #                         cmap=plt.cm.autumn)
+    # nc.set_zorder(2)
+    # ec.set_zorder(1)
+    # plt.colorbar(nc)
+#    nx.draw_networkx(G, ax=ax,
+#                     font_size=10,
+#                     alpha=.5,
+#                     width=.045,
+#                     edge_color='r',
+#                     node_size=pop_sizes,
+#                     labels=labels,
+#                     pos=pos,
+#                     node_color=popularity,
+#                     cmap=plt.cm.autumn)
+    year = G.graph['year']
+    name = G.graph['name']
+    fig.suptitle('{} for year {}'.format(name, year), fontsize=fontsize)
+#    ax.coastlines(resolution='50m')
+    gl = ax.gridlines(crs=ccrs.PlateCarree(), draw_labels=True,
+                      linewidth=0, color='gray', alpha=0.5, linestyle='--')
+    gl.top_labels=False
+    gl.right_labels=False
+    # gl.left_labels=False
+    # gl.bottom_labels=False
+    gl.ylocator = LatitudeLocator()
+    gl.xlocator = mticker.MaxNLocator(2)  
+    gl.xformatter = LongitudeFormatter()
+    gl.yformatter = LatitudeFormatter()
+    gl.xlabel_style = {'size': fontsize}
+    gl.ylabel_style = {'size': fontsize}
+    fig.canvas.draw()
+    ysegs = gl.yline_artists[0].get_segments()
+    yticks = [yseg[0,1] for yseg in ysegs]
+    xsegs = gl.xline_artists[0].get_segments()
+    xticks = [xseg[0,0] for xseg in xsegs]
+    ax.set_xticks(xticks, crs=ccrs.PlateCarree())
+    ax.set_yticks(yticks, crs=ccrs.PlateCarree())
+    # gl.xlabel_style = {'color': 'red', 'weight': 'bold'}
+    
+    # ax.xaxis.set_major_locator(mticker.MaxNLocator(2))
+    # ax.set_xticks(ax.get_xticks(), crs=ccrs.PlateCarree())
+    # ax.set_xticks(ax.get_xticks(), crs=ccrs.PlateCarree())
+#    ax.set_yticks([29, 30, 31, 32, 33], crs=ccrs.PlateCarree())
+#    lon_formatter = LongitudeFormatter(zero_direction_label=True)
+#    lat_formatter = LatitudeFormatter()
+#    ax.xaxis.set_major_formatter(lon_formatter)
+#    ax.yaxis.set_major_formatter(lat_formatter)
+#    ax.xaxis.set_major_locator(ticker.MaxNLocator(2))
+#    ax.yaxis.set_major_locator(ticker.MaxNLocator(5))
+#    ax.yaxis.set_major_formatter(lat_formatter)
+#    ax.xaxis.set_major_formatter(lon_formatter)
+    ax.tick_params(top=True, bottom=True, left=True, right=False,
+                   direction='out', labelbottom=False, labelleft=False, labelsize=fontsize)
+
+#    ax.figure.tight_layout()
+
+    fig.tight_layout()
+    fig.subplots_adjust(top=0.943,
+                        bottom=0.038,
+                        left=0.008,
+                        right=0.885,
+                        hspace=0.2,
+                        wspace=0.2)
+    if save:
+        filename = 'Migration_israel_map_{}.png'.format(year)
+        plt.savefig(savefig_path / filename, bbox_inches='tight', orientation='portrait')
+    return gl
 
 
 def plot_network(G, edge_width='percent_migrants'):
@@ -456,6 +638,44 @@ def plot_network(G, edge_width='percent_migrants'):
     return ax
 
 
+def get_subgraph_list(G, attr={'edge': 'number'}, bins=[100, 500, 10000]):
+    import numpy as np
+    import pandas as pd
+    # TODO: get subgraph depending on the attr, use digitize:
+    glist = []
+    if 'edge' in attr.keys():
+        name = attr['edge']
+        edges = [x for x in G.edges()]
+        attr_val=[G.edges()[x].get(name, 0) for x in G.edges()]
+        attr_df = pd.DataFrame({name: attr_val})
+        attr_df[['from','to']] = np.array(edges)
+        # digi = np.digitize(attr_val, bins=bins)
+        labels = np.arange(0, len(bins) - 1)
+        attr_df['{}_bins'.format(name)] = pd.cut(attr_df['number'], bins=bins,labels=labels)
+        # bin_items = list(set(digi))
+        # for bini in bin_items:
+        #     edges_slice = edges[np.where(digi==bini)]
+        #     t2=[tuple(x) for x in edges_slice.tolist()]
+        #     edge_subgraph = G.edge_subgraph(t2)
+        #     glist.append(edge_subgraph)
+        for bin_ind in labels:
+            sliced = attr_df[attr_df['{}_bins'.format(name)]==bin_ind][['from','to']].to_numpy()
+            t2=[tuple(x) for x in sliced.tolist()]
+            edge_subgraph = G.edge_subgraph(t2)
+            glist.append(edge_subgraph)
+    elif 'node' in attr.keys():
+        attr_val=np.array([G.nodes()[x].get(attr['node'], 0) for x in G.nodes()])
+    
+    return glist
+
+
+def get_bins_legend(bins=[100, 500, 10000]):
+    labels = []
+    for i in range(len(bins) - 1):
+        label = '{} - {}'.format(bins[i], bins[i+1])
+        labels.append(label)
+    return labels
+    
 def node_sizes_source_target(df, year=2000, level='district'):
     size_in = calculate_node_size_per_year(
         df, year=year, level=level, direction='inflow')
