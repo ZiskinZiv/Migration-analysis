@@ -11,7 +11,7 @@ Directions for network proccessing:
     level can be :'district', 'county' or 'city',
     you can also use return_json=True in order to export the G networkx object
     into JSON.
-    4) if you want, use cent_df= centrality_analysis(G, weight_col) to 
+    4) if you want, use cent_df= centrality_analysis(G, weight_col) to
     create centrality indicies with ot without weights (e.g., weight='Percent-migrants')
     5) there is a plot_network function, but it is for the district, county level
     (the city level works though the outcome is not that nice)
@@ -24,13 +24,31 @@ from MA_paths import savefig_path
 import matplotlib.ticker as ticker
 gis_path = work_david / 'gis'
 
-
+main_city_dict={'TLV':5000}
 
 level_dict = {
     'district': {'source': 'OutDistrict', 'target': 'InDistrict'},
     'county': {'source': 'OutCounty', 'target': 'InCounty'},
-    'city': {'source': 'OutID', 'target': 'InID'}
+    'city': {'source': 'Out_ID_new', 'target': 'In_ID_new'}
 }
+
+
+def get_out_migration_from_single_city(G, from_city_id=None):
+    import pandas as pd
+    import geopandas as gpd
+    df = pd.DataFrame([x for x in G[from_city_id].values()],
+                      index=[x for x in G[from_city_id].keys()])
+    gdf = gpd.GeoDataFrame(df, geometry=gpd.points_from_xy(df.InLON, df.InLAT))
+    # df = df.sort_values('number', ascending=False)
+    # if add_city_names:
+    #     geo = read_geo_name_cities(path=work_david)
+    #     df['city_name'] = geo.loc[df.index]['NameEn']
+    #     geo = geo.to_crs(epsg=2039)
+    #     dists = [geo.loc[from_city_id].geometry.distance(geo.loc[x].geometry) for x in df.index]
+    #     df['distance'] = dists
+    #     df['distance'] = df['distance'].div(1000)
+    # df['pct_from_city_size'] = df['number'].mul(100) / G.nodes()[from_city_id]['size']
+    return gdf
 
 
 def linear_map(arr, lb=0, ub=1):
@@ -42,29 +60,30 @@ def linear_map(arr, lb=0, ub=1):
     return arr
 
 
+# def feed_edges_attrs_to_G(G, dfs, degree='in'):
+#         # first add edges from out to in:
+#         # if degree == 'out':
+#         #     s = [x for x in dfs[source]]
+#         #     t = [x for x in dfs[target]]
+#         # elif degree == 'in':
+#         #     s = [x for x in dfs[target]]
+#         #     t = [x for x in dfs[source]]
+#         # outpop = [x for x in out_df['OutPop']]
+#         number = [x for x in dfs['Number']]
+#         # total = [x for x in dfs['Total']]
+#         pmigrants = [x for x in dfs['Percent-migrants']]
+#         outpercent = [x for x in dfs['Outpercent']]
+#         attrs = []
+#         for num, pmig, outp in zip(number, pmigrants, outpercent):
+#             attrs.append(dict(number=num, percent_migrants=pmig,
+#                               outpercent=outp))
+#         for sour, targ, attr in zip(s, t, attrs):
+#             G.add_edge(sour, targ, **attr)
+#         return G
+
+
 def create_G_with_df(df, level='city', graph_type='directed'):
     import networkx as nx
-
-    def feed_edges_attrs_to_G(dfs, degree='in'):
-        # first add edges from out to in:
-        if degree == 'out':
-            s = [x for x in dfs[source]]
-            t = [x for x in dfs[target]]
-        elif degree == 'in':
-            s = [x for x in dfs[target]]
-            t = [x for x in dfs[source]]
-        # outpop = [x for x in out_df['OutPop']]
-        number = [x for x in dfs['Number']]
-        # total = [x for x in dfs['Total']]
-        pmigrants = [x for x in dfs['Percent-migrants']]
-        outpercent = [x for x in dfs['Outpercent']]
-        attrs = []
-        for num, pmig, outp in zip(number, pmigrants, outpercent):
-            attrs.append(dict(number=num, percent_migrants=pmig,
-                              outpercent=outp))
-        for sour, targ, attr in zip(s, t, attrs):
-            G.add_edge(sour, targ, **attr)
-        return G
 
     # build graph with graph type:
     if graph_type == 'directed':
@@ -78,6 +97,8 @@ def create_G_with_df(df, level='city', graph_type='directed'):
     target = level_dict.get(level)['target']
     # select only inflow:
     in_df = df[df['Direction'] == 'inflow']
+    G = nx.from_pandas_edgelist(df, source=source, target=target, edge_attr=True,
+                                create_using=nx.DiGraph)
     # get nodes:
     nodes = [x for x in in_df[target].unique()] + \
         [x for x in in_df[source].unique()]
@@ -86,7 +107,7 @@ def create_G_with_df(df, level='city', graph_type='directed'):
     # seperate in/out dfs:
     # out_df = df[df['Direction'] == 'outflow']
     # G = feed_edges_attrs_to_G(out_df, degree='out')
-    G = feed_edges_attrs_to_G(in_df, degree='in')
+    # G = feed_edges_attrs_to_G(G, in_df, source, target, degree='in')
     return G
 
 
@@ -145,6 +166,7 @@ def get_out_id_greater_than_1(dfs_in, field='id', year=2000, savepath=None):
 
 def read_geo_name_cities(path=work_david):
     import pandas as pd
+    import geopandas as gpd
     geo = pd.read_excel(
         work_david /
         'Place-to-place migration-IL.xlsb',
@@ -156,6 +178,8 @@ def read_geo_name_cities(path=work_david):
     geo = geo.set_index('ID2').dropna()
     geo = geo.loc[~geo.index.duplicated(keep='first')]
     geo['ID'] = geo['ID'].astype(int)
+    geo = gpd.GeoDataFrame(geo, geometry=gpd.points_from_xy(geo.LON,geo.LAT))
+    geo.crs={'init':'epsg:4326'}
     return geo
 
 
@@ -197,7 +221,9 @@ def choose_year(df, year=2000, dropna=True, verbose=True):
     Output: sliced df"""
     import numpy as np
     if dropna:
-        df = df.dropna()
+        df = df[~df['Out_ID_new'].isnull()]
+        df = df[~df['In_ID_new'].isnull()]
+        # df = df.dropna()
     df = df[df['Year'] != 'ALL']
     if isinstance(year, int) or isinstance(year, str) or isinstance(year, np.int64):
         sliced_df = df.query('Year=={}'.format(year), engine='python')
@@ -222,6 +248,23 @@ def choose_year(df, year=2000, dropna=True, verbose=True):
         if verbose:
             print('chosen years {}-{}'.format(minyear, maxyear))
     return sliced_df
+
+def get_total_number_of_migrants(G, df, direction='In'):
+    # first filter:
+    df = df[~df['Out_ID_new'].isnull()]
+    df = df[~df['In_ID_new'].isnull()]
+    # get the total number of immgrants to city:
+    totals = []
+    for node in [x for x in G.nodes()]:
+        # valc = df[df['{}_ID_new'.format(direction)]==node]['Total'].value_counts()
+        valc = df[df['{}_ID_new'.format(direction)]==node].dropna()['Number'].sum()
+        # if valc.empty:
+        #     totals.append(0)
+        # else:
+            # totals.append(valc.index[0])
+        totals.append(valc)
+    total_dict = dict(zip([x for x in G.nodes()], totals))
+    return total_dict
 
 
 def build_directed_graph(df, path=work_david, year=2000, level='district',
@@ -271,17 +314,21 @@ def build_directed_graph(df, path=work_david, year=2000, level='district',
     df_in = df_sliced[df_sliced['Direction'] == 'inflow']
     # calculate popularity index:
     pi_dict = calculate_poplarity_index_for_InID(df_in)
-    # get the total number of immgrants to city:
-    totals = []
-    for node in [x for x in G.nodes()]:
-        valc = df_in[df_in['InID']==node]['Total'].value_counts()
-        if valc.empty:
-            totals.append(0)
-        else:
-            totals.append(valc.index[0])
-    total_dict = dict(zip([x for x in G.nodes()], totals))
+    total_dict_in = get_total_number_of_migrants(G, df_in, direction='In')
+    total_dict_out = get_total_number_of_migrants(G, df_in, direction='Out')
     # set some node attrs:
-    nx.set_node_attributes(G, total_dict, 'total_in')
+    nx.set_node_attributes(G, total_dict_in, 'total_in')
+    nx.set_node_attributes(G, total_dict_out, 'total_out')
+    total_net = {}
+    for (key1, val1), (key2, val2) in zip(total_dict_in.items(), total_dict_out.items()):
+        assert key1 == key2
+        total_net[key1] = val1 - val2
+    nx.set_node_attributes(G, total_net, 'total_net')
+    # check that net totals is zero across network (conservation of people:-):
+    nets = []
+    for node in G.nodes():
+        nets.append(G.nodes()[node]['total_net'])
+    assert sum(nets) == 0
     nx.set_node_attributes(G, pi_dict, 'popularity')
     nx.set_node_attributes(G, node_sizes, 'size')
 #    nx.set_node_attributes(G, node_geo, 'coords_lat_lon')
@@ -322,8 +369,8 @@ def calculate_poplarity_index_for_InID(df_in):
     all_migrants = df_in['Number'].sum()
     pi_key = []
     pi_val = []
-    for inid in df_in['InID'].unique():
-        all_inid = df_in[df_in['InID'] == inid]['Number'].sum()
+    for inid in df_in['In_ID_new'].unique():
+        all_inid = df_in[df_in['In_ID_new'] == inid]['Number'].sum()
         pi = (all_migrants - all_inid) / all_inid
         pi_key.append(inid)
         pi_val.append(pi)
@@ -363,7 +410,7 @@ def calculate_centrality_to_dataframe(G, centrality='in_degree',
         d = dict(nx.harmonic_centrality(G, distance='distance'))
     # now, non-centrality methods such as clustering, etc...
     elif centrality == 'clustering':
-        d = dict(nx.clustering(G, weight=weight_col))    
+        d = dict(nx.clustering(G, weight=weight_col))
     nx.set_node_attributes(G, d, centrality)
     df = pd.DataFrame([x for x in d.values()], index=[
                       x for x in d.keys()], columns=[centrality])
@@ -565,7 +612,7 @@ def plot_network_on_israel_map(G=None, gis_path=gis_path, fontsize=18,
     # gl.left_labels=False
     # gl.bottom_labels=False
     gl.ylocator = LatitudeLocator()
-    gl.xlocator = mticker.MaxNLocator(2)  
+    gl.xlocator = mticker.MaxNLocator(2)
     gl.xformatter = LongitudeFormatter()
     gl.yformatter = LatitudeFormatter()
     gl.xlabel_style = {'size': fontsize}
@@ -578,7 +625,7 @@ def plot_network_on_israel_map(G=None, gis_path=gis_path, fontsize=18,
     ax.set_xticks(xticks, crs=ccrs.PlateCarree())
     ax.set_yticks(yticks, crs=ccrs.PlateCarree())
     # gl.xlabel_style = {'color': 'red', 'weight': 'bold'}
-    
+
     # ax.xaxis.set_major_locator(mticker.MaxNLocator(2))
     # ax.set_xticks(ax.get_xticks(), crs=ccrs.PlateCarree())
     # ax.set_xticks(ax.get_xticks(), crs=ccrs.PlateCarree())
@@ -665,7 +712,7 @@ def get_subgraph_list(G, attr={'edge': 'number'}, bins=[100, 500, 10000]):
             glist.append(edge_subgraph)
     elif 'node' in attr.keys():
         attr_val=np.array([G.nodes()[x].get(attr['node'], 0) for x in G.nodes()])
-    
+
     return glist
 
 
@@ -675,7 +722,7 @@ def get_bins_legend(bins=[100, 500, 10000]):
         label = '{} - {}'.format(bins[i], bins[i+1])
         labels.append(label)
     return labels
-    
+
 def node_sizes_source_target(df, year=2000, level='district'):
     size_in = calculate_node_size_per_year(
         df, year=year, level=level, direction='inflow')
