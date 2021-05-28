@@ -22,6 +22,8 @@ Directions for network proccessing:
 from MA_paths import work_david
 from MA_paths import savefig_path
 import matplotlib.ticker as ticker
+from MA_paths import savefig_path
+
 gis_path = work_david / 'gis'
 
 main_city_dict={'TLV':5000}
@@ -31,6 +33,269 @@ level_dict = {
     'county': {'source': 'OutCounty', 'target': 'InCounty'},
     'city': {'source': 'Out_ID_new', 'target': 'In_ID_new'}
 }
+
+def path_glob(path, glob_str='*.nc', return_empty_list=False):
+    """returns all the files with full path(pathlib3 objs) if files exist in
+    path, if not, returns FilenotFoundErro"""
+    from pathlib import Path
+#    if not isinstance(path, Path):
+#        raise Exception('{} must be a pathlib object'.format(path))
+    path = Path(path)
+    files_with_path = [file for file in path.glob(glob_str) if file.is_file]
+    if not files_with_path and not return_empty_list:
+        raise FileNotFoundError('{} search in {} found no files.'.format(glob_str,
+                        path))
+    elif not files_with_path and return_empty_list:
+        return files_with_path
+    else:
+        return files_with_path
+
+
+def plot_time_series_with_marginal_histogram(x, y, fontsize=16,
+                                             figsize=(15, 4), save=True):
+    import seaborn as sns
+    import matplotlib.pyplot as plt
+    import numpy as np
+    sns.set_style('whitegrid')
+    sns.set_style('ticks')
+    y = y.div(1000)
+    grid = sns.JointGrid(x, y, ratio=3)
+    grid.plot_joint(plt.plot)
+    grid.ax_joint.plot(x, y, c='C0')
+    plt.sca(grid.ax_marg_y)
+    sns.distplot(grid.y, kde=False, vertical=True, bins=10)
+    # override a bunch of the default JointGrid style options
+    grid.fig.set_size_inches(*figsize)
+    grid.ax_marg_x.remove()
+    grid.ax_joint.spines['top'].set_visible(True)
+    grid.set_axis_labels(xlabel='', ylabel='Thousands of poeple', fontsize=fontsize)
+    grid.ax_joint.grid(True)
+    grid.ax_joint.set_yticks(np.arange(140, 210, 10))
+    grid.ax_joint.tick_params(labelsize=fontsize)
+    grid.fig.tight_layout()
+    grid.fig.suptitle('Total annual migrations in Israel', fontsize=fontsize)
+    grid.fig.subplots_adjust(top=1.0,
+                            bottom=0.119,
+                            left=0.064,
+                            right=0.99,
+                            hspace=0.0,
+                            wspace=0.0)
+    if save:
+        filename = 'total_migration_israel.png'
+        plt.savefig(savefig_path / filename, bbox_inches='tight')
+        # plt.savefig(savefig_path / filename, orientation='landscape')
+    return grid
+
+
+def plot_net_migration_per_minum_total_migrators(da, mig_min=10000,
+                                                 fontsize=16, save=True):
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+    sns.set_style('whitegrid')
+    sns.set_style('ticks')
+    df = produce_migration_df_per_minimum_total_migrators(da, param='total_net',
+                                                          mig_min=mig_min,
+                                                          normalize=None)
+    df = df.div(1000)
+    ax = df.plot(legend=False, rot=30, figsize=(10, 8))
+    ax.set_xlabel('')
+    plt.legend(prop={'size': fontsize-2})
+    ax.tick_params(labelsize=fontsize)
+    ax.set_ylabel('Thousands of poeple', fontsize=fontsize)
+    ax.axhline(0, linewidth=1.5, linestyle='--', color='k')
+    ax.grid(True)
+    fig = plt.gcf()
+    fig.suptitle('Net migration', fontsize=fontsize)
+    fig.tight_layout()
+    if save:
+        filename = 'Top_5_migration_cities_net_israel.png'
+        plt.savefig(savefig_path / filename, bbox_inches='tight')
+    return fig
+
+
+def plot_total_migration_per_minimum_total_migrators(da, mig_min=10000,
+                                                     fontsize=16, save=True):
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+    sns.set_style('whitegrid')
+    sns.set_style('ticks')
+    df = produce_migration_df_per_minimum_total_migrators(da, param=None,
+                                                          mig_min=mig_min,
+                                                          normalize=None)
+    df = df.div(1000)
+    df_normal = produce_migration_df_per_minimum_total_migrators(da, param=None,
+                                                                 mig_min=mig_min,
+                                                                 normalize='size')
+    df_normal = df_normal.mul(100)
+    fig, axes = plt.subplots(1, 2, sharex=False, sharey=False, figsize=(15, 5))
+    axes[0] = df.plot(ax=axes[0], legend=False, rot=30)
+    axes[1] = df_normal.plot(ax=axes[1], legend=False, rot=30)
+    [ax.set_xlabel('') for ax in axes]
+    [ax.tick_params(labelsize=fontsize) for ax in axes]
+    axes[0].set_ylabel('Thousands of poeple', fontsize=fontsize)
+    axes[1].set_ylabel('Percent of city size', fontsize=fontsize)
+    [ax.grid(True) for ax in axes]
+    fig.tight_layout()
+    handles, labels = axes[0].get_legend_handles_labels()
+    fig.legend(labels=labels, handles=handles, prop={'size': fontsize-2},
+               edgecolor='k',
+               framealpha=0.5, fancybox=True, facecolor='white',
+               ncol=5, fontsize=fontsize, loc='upper center', bbox_to_anchor=(0.5, 1.005),
+               bbox_transform=plt.gcf().transFigure)
+    fig.subplots_adjust(top=0.897)
+    if save:
+        filename = 'Top_5_migration_cities_israel.png'
+        plt.savefig(savefig_path / filename, bbox_inches='tight')
+    return fig
+
+
+def add_2015_peripheri_index_to_da(da, path=work_david):
+    from cbs_procedures import read_periphery_index
+    import xarray as xr
+    df = read_periphery_index(path)
+    ds = da.to_dataset('parameter')
+    p_inds = []
+    p_nodes = []
+    for node in ds.node:
+        if node in [str(x) for x in df.index]:
+            p_nodes.append(node.values)
+            p_inds.append(df.loc[int(node), 'P2015_value'])
+    pda = xr.DataArray(p_inds, dims=['node'])
+    pda['node'] = [x for x in p_nodes]
+    pda = pda.expand_dims('time')
+    pda['time'] = [2015]
+    ds['P2015_index'] = pda
+    da_new = ds.to_array('parameter')
+    return da_new
+
+
+# def split_da_into_pc(da):
+#     """ split da into Periphery and Center das"""
+#     pc = da.sel(parameter='P-C').isel(time=0).to_dataframe('PC')['PC']
+#     center = pc[pc == 'Center']
+#     peri = pc[pc == 'Periphery']
+#     da_c = da.sel(node=center.index)
+#     da_p = da.sel(node=peri.index)
+#     return da_c, da_p
+
+
+def produce_migration_df_per_minimum_total_migrators(da, param=None, mig_min=10000,
+                                                     normalize='size',
+                                                     node_code_to_city=True):
+    import pandas as pd
+    print('minimum total migrators allowed are : {}'.format(mig_min))
+    print('getting {} parameter.'.format(param))
+    da_inout = da.sel(parameter='total_out').astype(
+        'float')+da.sel(parameter='total_in').astype('float')
+    if normalize is not None:
+        print('normalizing total migrators by {}.'.format(normalize))
+        da_inout_normal = da_inout / da.sel(parameter=normalize).astype('float')
+        da_inout_normal = da_inout_normal.reset_coords(drop=True)
+        df_normal = da_inout_normal.to_dataset('node').to_dataframe()
+    da_inout = da_inout.reset_coords(drop=True)
+    df = da_inout.to_dataset('node').to_dataframe()
+    df = df[df>=float(mig_min)].dropna(axis=1)
+    if normalize is not None:
+        df = df_normal[[x for x in df_normal.columns if x in df.columns]]
+    if param is not None:
+        da_param = da.sel(parameter=param).astype('float')
+        da_param = da_param.sel(node=df.columns)
+        da_param = da_param.reset_coords(drop=True)
+        df = da_param.to_dataset('node').to_dataframe()
+    if node_code_to_city:
+        cols = [x for x in df.columns]
+        new_cols = [da.sel(node=x, parameter='NameEn').isel(time=0).item() for x in cols]
+        df.columns = new_cols
+    df.index = pd.to_datetime(df.index, format='%Y')
+    return df
+
+
+def produce_total_migration_size_df(da, plot=True, fontsize=16):
+    import pandas as pd
+    import seaborn as sns
+    import matplotlib.pyplot as plt
+    sns.set_style('whitegrid')
+    sns.set_style('ticks')
+    sizes = da.sel(parameter='size').dropna('node').sum('node').astype('float')
+    total_in = da.sel(parameter='total_in').sum('node').astype('float')
+    df = sizes.reset_coords(drop=True).to_dataframe(name='population')
+    df['migration'] = total_in.reset_coords(drop=True).to_dataframe('migration')
+    df['ratio'] = 100 * (df['migration'] / df['population'])
+    df.index = pd.to_datetime(df.index, format='%Y')
+    if plot:
+        df['migration'] /= 1000
+        df['population'] /= 1000
+        axes = df.plot(subplots=True, figsize=(15, 12))
+        [ax.grid(True) for ax in axes]
+        axes[0].set_ylabel('Thousands of poeple', fontsize=fontsize)
+        axes[1].set_ylabel('Thousands of poeple', fontsize=fontsize)
+        axes[2].set_ylabel('Percent', fontsize=fontsize)
+        [ax.tick_params(labelsize=fontsize) for ax in axes]
+        axes[2].set_xlabel('')
+        fig = plt.gcf()
+        fig.tight_layout()
+    return df
+
+
+def fix_node_size_issue(da):
+    """i calculate node size (city total pop) by the migration
+    dataframe where only cities the was migration has the OutPop field
+    no NaN"""
+    import numpy as np
+    for node in da['node']:
+        da_node = da.sel(node=node, parameter='size').astype(float)
+        da_node[da_node == 0] = np.nan
+        da_node = da_node.interpolate_na('time')
+        da.loc[dict(node=node,parameter='size')] = da_node
+    return da
+
+
+def produce_nodes_time_series(G_list):
+    import xarray as xr
+    # produce dataarray (time and city code)
+    years = []
+    da_years = []
+    for G in G_list:
+        keys = [x for x in G.nodes()[5000].keys()]
+        nodes = [x for x in G.nodes()]
+        year = G.graph['year']
+        years.append(year)
+        print('processing year {}.'.format(year))
+        da_list = []
+        for key in keys:
+            vari = [x[-1] for x in G.nodes(data=key)]
+            try:
+                da = xr.DataArray(vari, dims=['node'])
+            except TypeError:
+                continue
+            da['node'] = nodes
+            da.name = key
+            da_list.append(da)
+        ds = xr.merge(da_list)
+        da_year = ds.to_array(dim='parameter')
+        da_years.append(da_year)
+    da = xr.concat(da_years, 'time')
+    da['time'] = years
+    return da
+
+
+def read_all_multi_year_gpickles(path=work_david):
+    import networkx as nx
+    files = sorted(path_glob(path, 'ISR_migration_network_annual_*.gpickle'))
+    Gs = []
+    for file in files:
+        Gs.append(nx.read_gpickle(file))
+    return Gs
+
+
+def save_multi_year_migration_network(df, start=2000, end=2017, savepath=work_david):
+    import networkx as nx
+    import numpy as np
+    for year in np.arange(start, end+1):
+        G = build_directed_graph(df, level='city', year=year)
+        nx.write_gpickle(
+            G, savepath / "ISR_migration_network_annual_{}.gpickle".format(year))
+    return
 
 
 def get_out_migration_from_single_city(G, from_city_id=None):
