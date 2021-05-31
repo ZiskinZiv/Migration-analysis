@@ -18,24 +18,47 @@ from MA_paths import work_david
 #         headers[line[:split_here]] = line[split_here+2:]
 #     return headers
 
+def get_all_nadlan_deals_from_one_city(path=work_david, city_code=5000, savepath=None):
+    df = read_street_city_names(path=path)
+    streets_df = get_all_streets_from_df(df, city_code)
+    for i, row in streets_df.iterrows():
+        city_name = row['city_name']
+        street_name = row['street_name']
+        street_code = row['street_code']
+        print('getting nadlan deals for city: {} and street: {}'.format(city_name, street_name))
+        df = get_all_historical_nadlan_deals(city=city_name, street=street_name, city_code=city_code, street_code=street_code, savepath=savepath)
+    return
+
+
+def get_all_city_codes_from_largest_to_smallest(path=work_david):
+    dff=read_periphery_index(work_david)
+    city_codes = dff.sort_values('Pop2015', ascending=False).index
+    return city_codes
+
 def get_all_streets_from_df(df, city_code=5000):
     return df[df['city_code'] == city_code]
+
 
 def read_street_city_names(path=work_david):
     import pandas as pd
     df = pd.read_csv(path/'street_names_israel.csv', encoding="cp1255")
     df.columns = ['city_code', 'city_name', 'street_code', 'street_name']
+    df['city_name'] = df['city_name'].str.replace('תל אביב - יפו', 'תל אביב יפו')
     return df
 
 
-def parse_one_json_nadlan_page_to_pandas(page):
+def parse_one_json_nadlan_page_to_pandas(page, city_code=None, street_code=None):
     import pandas as pd
     df = pd.DataFrame(page['AllResults'])
     df.set_index('DEALDATETIME', inplace=True)
     df.index = pd.to_datetime(df.index)
     df['DEALAMOUNT'] = df['DEALAMOUNT'].str.replace(',','').astype(int)
-    df['DEALNATURE'] = df['DEALNATURE'].astype(float)
+    df['DEALNATURE'] = pd.to_numeric(df['DEALNATURE'])
     df['ASSETROOMNUM'] = pd.to_numeric(df['ASSETROOMNUM'])
+    if city_code is not None:
+        df['city_code'] = city_code
+    if street_code is not None:
+        df['street_code'] = street_code
     return df
 
 
@@ -46,6 +69,8 @@ def produce_nadlan_rest_request(city='רעננה', street='אחוזה'):
     body = r.json()
     if r.status_code != 200:
         raise ValueError('couldnt get a response.')
+    if body['ResultType'] != 1:
+        raise TypeError(body['ResultLable'])
     if body['PageNo'] == 0:
         body['PageNo'] = 1
     return body
@@ -58,12 +83,14 @@ def post_nadlan_rest(body):
     if r.status_code != 200:
         raise ValueError('couldnt get a response.')
     result = r.json()
-    if result['ResultType'] != 1:
-        raise TypeError(result['ResultLable'])
+    if not result['AllResults']:
+        raise TypeError('no results found')
     return result
 
 
-def get_all_historical_nadlan_deals(city='רעננה', street='אחוזה'):
+def get_all_historical_nadlan_deals(city='רעננה', street='אחוזה',
+                                    city_code=None, street_code=None,
+                                    savepath=None):
     import pandas as pd
     body = produce_nadlan_rest_request(city=city, street=street)
     page_dfs = []
@@ -71,8 +98,11 @@ def get_all_historical_nadlan_deals(city='רעננה', street='אחוזה'):
     last_page = False
     while not last_page:
         print('Page : ', cnt)
-        result = post_nadlan_rest(body)
-        page_dfs.append(parse_one_json_nadlan_page_to_pandas(result))
+        try:
+            result = post_nadlan_rest(body)
+        except TypeError:
+            return pd.DataFrame()
+        page_dfs.append(parse_one_json_nadlan_page_to_pandas(result, city_code, street_code))
         cnt += 1
         if result['IsLastPage']:
             last_page = True
@@ -80,6 +110,12 @@ def get_all_historical_nadlan_deals(city='רעננה', street='אחוזה'):
             body['PageNo'] += 1
     df = pd.concat(page_dfs)
     df = df.sort_index()
+    if savepath is not None:
+        yrmin = df.index.min().year
+        yrmax = df.index.max().year
+        filename = 'Nadlan_deals_city_{}_street_{}_{}-{}.csv'.format(city_code, street_code, yrmin, yrmax)
+        df.to_csv(savepath/filename, na_rep='None')
+        print('{} was saved to {}.'.format(filename, savepath))
     return df
 
 
