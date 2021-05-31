@@ -8,6 +8,81 @@ Created on Tue May 11 11:44:45 2021
 from MA_paths import work_david
 
 
+# def convert_headers_to_dict(filepath):
+#     f = open(filepath, "r")
+#     lines = f.readlines()
+#     headers = {}
+#     for old_line in lines:
+#         line = old_line.replace("\n", "")
+#         split_here = line.find(":")
+#         headers[line[:split_here]] = line[split_here+2:]
+#     return headers
+
+def get_all_streets_from_df(df, city_code=5000):
+    return df[df['city_code'] == city_code]
+
+def read_street_city_names(path=work_david):
+    import pandas as pd
+    df = pd.read_csv(path/'street_names_israel.csv', encoding="cp1255")
+    df.columns = ['city_code', 'city_name', 'street_code', 'street_name']
+    return df
+
+
+def parse_one_json_nadlan_page_to_pandas(page):
+    import pandas as pd
+    df = pd.DataFrame(page['AllResults'])
+    df.set_index('DEALDATETIME', inplace=True)
+    df.index = pd.to_datetime(df.index)
+    df['DEALAMOUNT'] = df['DEALAMOUNT'].str.replace(',','').astype(int)
+    df['DEALNATURE'] = df['DEALNATURE'].astype(float)
+    df['ASSETROOMNUM'] = pd.to_numeric(df['ASSETROOMNUM'])
+    return df
+
+
+def produce_nadlan_rest_request(city='רעננה', street='אחוזה'):
+    import requests
+    url = 'https://www.nadlan.gov.il/Nadlan.REST/Main/GetDataByQuery?query={} {}'.format(city, street)
+    r = requests.get(url)
+    body = r.json()
+    if r.status_code != 200:
+        raise ValueError('couldnt get a response.')
+    if body['PageNo'] == 0:
+        body['PageNo'] = 1
+    return body
+
+
+def post_nadlan_rest(body):
+    import requests
+    url = 'https://www.nadlan.gov.il/Nadlan.REST/Main/GetAssestAndDeals'
+    r = requests.post(url, json=body)
+    if r.status_code != 200:
+        raise ValueError('couldnt get a response.')
+    result = r.json()
+    if result['ResultType'] != 1:
+        raise TypeError(result['ResultLable'])
+    return result
+
+
+def get_all_historical_nadlan_deals(city='רעננה', street='אחוזה'):
+    import pandas as pd
+    body = produce_nadlan_rest_request(city=city, street=street)
+    page_dfs = []
+    cnt = 1
+    last_page = False
+    while not last_page:
+        print('Page : ', cnt)
+        result = post_nadlan_rest(body)
+        page_dfs.append(parse_one_json_nadlan_page_to_pandas(result))
+        cnt += 1
+        if result['IsLastPage']:
+            last_page = True
+        else:
+            body['PageNo'] += 1
+    df = pd.concat(page_dfs)
+    df = df.sort_index()
+    return df
+
+
 def read_periphery_index(path=work_david):
     import pandas as pd
     df = pd.read_excel(
