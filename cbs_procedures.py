@@ -36,6 +36,21 @@ nadlan_path = work_david / 'Nadlan_deals'
 #     df = pd.concat([df, loc_df], axis=1)
 #     return df
 
+# def fill_in_missing_str_in_the_same_col(df, same_val_col='GUSH', missin_col='Neighborhood'):
+#     for group, inds in df.groupby([same_val_col]).groups.items():
+#         if len(inds) > 1:
+            
+            
+def remove_outlier(df_in, col_name):
+    q1 = df_in[col_name].quantile(0.25)
+    q3 = df_in[col_name].quantile(0.75)
+    iqr = q3-q1  # Interquartile range
+    fence_low = q1-1.5*iqr
+    fence_high = q3+1.5*iqr
+    df_out = df_in.loc[(df_in[col_name] > fence_low) &
+                       (df_in[col_name] < fence_high)]
+    return df_out
+
 
 def sleep_between(start=2, end=4):
     from numpy import random
@@ -45,6 +60,18 @@ def sleep_between(start=2, end=4):
     sleep(sleeptime)
     print("sleeping is over")
     return
+
+
+def process_nadlan_deals_df_from_one_city(df):
+    # first, drop some cols:
+    df = df.drop(['NEWPROJECTTEXT', 'PROJECTNAME', 'YEARBUILT', 'KEYVALUE', 'TYPE',
+                  'POLYGON_ID', 'TREND_IS_NEGATIVE', 'TREND_FORMAT', 'ObjectID', 'DescLayerID'], axis=1)
+    # remove outliers in squared meters per asset:
+    df = remove_outlier(df, 'DEALNATURE')
+    df = remove_outlier(df, 'ASSETROOMNUM')
+    # calculate squared meters per room:
+    df['M2_per_ROOM'] = df['DEALNATURE'] / df['ASSETROOMNUM']
+    return df
 
 
 def concat_all_nadlan_deals_from_one_city_and_save(nadlan_path=work_david/'Nadlan_deals',
@@ -61,10 +88,22 @@ def concat_all_nadlan_deals_from_one_city_and_save(nadlan_path=work_david/'Nadla
     df.set_index(pd.to_datetime(df['DEALDATETIME']), inplace=True)
     df.drop(['DEALDATETIME', 'DEALDATE', 'DISPLAYADRESS'], axis=1, inplace=True)
     print('concated all {} csv files.'.format(city_code))
-    # take care of street_code columns all but duplicates bc of neighhood code/street code:
     df = df.sort_index()
     df = df.iloc[:, 2:]
-    df = df.drop_duplicates(subset=df.columns.difference(['street_code']))
+    # first drop records with no full address:
+    df = df[~df['FULLADRESS'].isna()]
+    # now go over all the unique GUSHs and fill in the geoloc codes if missing
+    # and then drop duplicates
+    good_district = df['District'].unique()[df['District'].unique() != ''][0]
+    good_city = df['City'].unique()[df['City'].unique() != ''][0]
+    df = df.copy()
+    df.loc[:, 'District'].fillna(good_district, inplace=True)
+    df.loc[:, 'City'].fillna(good_city, inplace=True)
+    # take care of street_code columns all but duplicates bc of neighhood code/street code:
+    df = df.drop_duplicates(subset=df.columns.difference(['street_code', 'Street']))
+    # lasty, extract Building number from FULLADRESS and is NaN remove record:
+    df['Building'] = df['FULLADRESS'].str.extract('(\d+)')
+    df = df[~df['Building'].isna()]
     if savepath is not None:
         yrmin = df.index.min().year
         yrmax = df.index.max().year
