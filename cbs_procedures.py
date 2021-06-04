@@ -41,18 +41,20 @@ nadlan_path = work_david / 'Nadlan_deals'
 #         if len(inds) > 1:
 
 
-def remove_outlier(df_in, col_name):
+def remove_outlier(df_in, col_name, k=1.5):
+    """remove outlier using iqr criterion (k=1.5)"""
     q1 = df_in[col_name].quantile(0.25)
     q3 = df_in[col_name].quantile(0.75)
     iqr = q3-q1  # Interquartile range
-    fence_low = q1-1.5*iqr
-    fence_high = q3+1.5*iqr
+    fence_low = q1 - k * iqr
+    fence_high = q3 + k * iqr
     df_out = df_in.loc[(df_in[col_name] > fence_low) &
                        (df_in[col_name] < fence_high)]
     return df_out
 
 
 def sleep_between(start=2, end=4):
+    """sleep between start and end seconds"""
     from numpy import random
     from time import sleep
     sleeptime = random.uniform(start, end)
@@ -63,6 +65,8 @@ def sleep_between(start=2, end=4):
 
 
 def process_nadlan_deals_df_from_one_city(df):
+    """first attempt of proccessing nadlan deals df:
+        removal of outliers and calculation of various indices"""
     # first, drop some cols:
     df = df.drop(['NEWPROJECTTEXT', 'PROJECTNAME', 'YEARBUILT', 'KEYVALUE', 'TYPE',
                   'POLYGON_ID', 'TREND_IS_NEGATIVE', 'TREND_FORMAT', 'ObjectID', 'DescLayerID'], axis=1)
@@ -77,6 +81,7 @@ def process_nadlan_deals_df_from_one_city(df):
 def concat_all_nadlan_deals_from_all_cities_and_save(nadlan_path=work_david/'Nadlan_deals',
                                                      savepath=None,
                                                      delete_files=False):
+    """concat all nadlan deals for all the cities in nadlan_path"""
     from Migration_main import path_glob
     import numpy as np
     files = path_glob(nadlan_path, 'Nadlan_deals_city_*_street_*.csv')
@@ -95,6 +100,7 @@ def concat_all_nadlan_deals_from_one_city_and_save(nadlan_path=work_david/'Nadla
                                                    city_code=8700,
                                                    savepath=None,
                                                    delete_files=False):
+    """concat all nadlan deals for all streets in a specific city"""
     import pandas as pd
     from Migration_main import path_glob
     import click
@@ -104,7 +110,7 @@ def concat_all_nadlan_deals_from_one_city_and_save(nadlan_path=work_david/'Nadla
     df = pd.concat(dfs)
     df.set_index(pd.to_datetime(df['DEALDATETIME']), inplace=True)
     df.drop(['DEALDATETIME', 'DEALDATE', 'DISPLAYADRESS'], axis=1, inplace=True)
-    print('concated all {} csv files.'.format(city_code))
+    print('concated all {} ({}) csv files.'.format(df['City'].unique()[0] , city_code))
     df = df.sort_index()
     df = df.iloc[:, 2:]
     # first drop records with no full address:
@@ -114,7 +120,8 @@ def concat_all_nadlan_deals_from_one_city_and_save(nadlan_path=work_david/'Nadla
     good_district = df['District'].unique()[df['District'].unique() != ''][0]
     good_city = df['City'].unique()[df['City'].unique() != ''][0]
     df = df.copy()
-    df.loc[:, 'District'].fillna(good_district, inplace=True)
+    if not pd.isnull(good_district):
+        df.loc[:, 'District'].fillna(good_district, inplace=True)
     df.loc[:, 'City'].fillna(good_city, inplace=True)
     # take care of street_code columns all but duplicates bc of neighhood code/street code:
     df = df.drop_duplicates(subset=df.columns.difference(['street_code', 'Street']))
@@ -137,10 +144,11 @@ def concat_all_nadlan_deals_from_one_city_and_save(nadlan_path=work_david/'Nadla
 
 
 def get_all_nadlan_deals_from_one_city(path=work_david, city_code=5000,
-                                       savepath=None, sleep_between_streets=True):
+                                       savepath=None, sleep_between_streets=[1,  5]):
+    """gets all nadlan deals for specific city from nadlan.gov.il"""
     import pandas as pd
     df = read_street_city_names(path=path, filter_neighborhoods=True)
-    streets_df = get_all_streets_from_df(df, city_code)
+    streets_df = df[df['city_code'] == city_code]
     bad_streets_df = pd.DataFrame()
     all_streets = len(streets_df)
     cnt = 1
@@ -149,7 +157,7 @@ def get_all_nadlan_deals_from_one_city(path=work_david, city_code=5000,
         street_name = row['street_name']
         street_code = row['street_code']
         print('Fetching Nadlan deals, city: {} , street: {} ({} out of {})'.format(
-            city_name, street_name), cnt, all_streets)
+            city_name, street_name, cnt, all_streets))
         df = get_all_historical_nadlan_deals(
             city=city_name, street=street_name, city_code=city_code,
             street_code=street_code, savepath=savepath, sleep_between_streets=True)
@@ -161,11 +169,13 @@ def get_all_nadlan_deals_from_one_city(path=work_david, city_code=5000,
             print('no data for street: {} in {}'.format(street_name, city_name))
             bad_streets_df = bad_streets_df.append(bad_df)
         elif df.empty:
+            cnt += 1
             continue
-        if sleep_between_streets:
-            sleep_between(1, 5)
-    print('Done scraping {} city () from nadlan.gov.il'.format(city_name, city_code))
-    cnt += 1
+        if sleep_between_streets is not None:
+            sleep_between(sleep_between_streets[0], sleep_between_streets[1])
+        cnt += 1
+    print('Done scraping {} city ({}) from nadlan.gov.il'.format(city_name, city_code))
+
     if savepath is not None:
         filename = 'Nadlan_missing_streets_{}.csv'.format(city_code)
         bad_streets_df.to_csv(savepath/filename)
@@ -174,25 +184,29 @@ def get_all_nadlan_deals_from_one_city(path=work_david, city_code=5000,
 
 
 def get_all_city_codes_from_largest_to_smallest(path=work_david):
+    """get all city codes and sort using population (2015)"""
     dff = read_periphery_index(work_david)
     city_codes = dff.sort_values('Pop2015', ascending=False)
     return city_codes
 
-def get_all_streets_from_df(df, city_code=5000):
-    return df[df['city_code'] == city_code]
 
-
-def read_street_city_names(path=work_david, filter_neighborhoods=True):
+def read_street_city_names(path=work_david, filter_neighborhoods=True,
+                           fix_alley=True):
+    """get street names, codes and city names and codes"""
     import pandas as pd
     df = pd.read_csv(path/'street_names_israel.csv', encoding="cp1255")
     df.columns = ['city_code', 'city_name', 'street_code', 'street_name']
-    df['city_name'] = df['city_name'].str.replace('תל אביב - יפו', 'תל אביב יפו')
+    df['city_name'] = df['city_name'].str.replace(
+        'תל אביב - יפו', 'תל אביב יפו')
     if filter_neighborhoods:
         df = df[df['street_code'] <= 5999]
+    if fix_alley:
+        df['street_name'] = df['street_name'].str.replace('סמ ', 'סמטת ')
     return df
 
 
 def parse_one_json_nadlan_page_to_pandas(page, city_code=None, street_code=None):
+    """parse one request of nadlan deals JSON to pandas"""
     import pandas as pd
     df = pd.DataFrame(page['AllResults'])
     # df.set_index('DEALDATETIME', inplace=True)
@@ -210,6 +224,7 @@ def parse_one_json_nadlan_page_to_pandas(page, city_code=None, street_code=None)
 
 def produce_nadlan_rest_request(city='רעננה', street='אחוזה',
                                 full_address=None):
+    """produce the body of nadlan deals request, also usfull for geolocations"""
     import requests
     if full_address is not None:
         url = 'https://www.nadlan.gov.il/Nadlan.REST/Main/GetDataByQuery?query={}'.format(full_address)
@@ -221,12 +236,15 @@ def produce_nadlan_rest_request(city='רעננה', street='אחוזה',
         raise ValueError('couldnt get a response.')
     if body['ResultType'] != 1 and full_address is None:
         raise TypeError(body['ResultLable'])
+    if body['DescLayerID'] == 'NEIGHBORHOODS_AREA':
+        raise TypeError('result is a NEIGHBORHOOD!, skipping')
     if body['PageNo'] == 0:
         body['PageNo'] = 1
     return body
 
 
 def post_nadlan_rest(body):
+    """take body from request and post to nadlan.gov.il deals REST API"""
     import requests
     url = 'https://www.nadlan.gov.il/Nadlan.REST/Main/GetAssestAndDeals'
     r = requests.post(url, json=body)
@@ -239,6 +257,7 @@ def post_nadlan_rest(body):
 
 
 def parse_body_request_to_dataframe(body):
+    """parse body request to pandas"""
     import pandas as pd
 
     def parse_body_navs(body):
