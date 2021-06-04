@@ -179,6 +179,12 @@ def add_2015_peripheri_index_to_da(da, path=work_david):
 #     return da_c, da_p
 
 
+def get_total_migrators_from_da(da):
+    da_inout = da.sel(parameter='total_out').astype(
+        'float')+da.sel(parameter='total_in').astype('float')
+    return da_inout
+
+
 def produce_migration_df_per_minimum_total_migrators(da, param=None, mig_min=10000,
                                                      normalize='size',
                                                      node_code_to_city=True):
