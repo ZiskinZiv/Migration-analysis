@@ -39,8 +39,8 @@ nadlan_path = work_david / 'Nadlan_deals'
 # def fill_in_missing_str_in_the_same_col(df, same_val_col='GUSH', missin_col='Neighborhood'):
 #     for group, inds in df.groupby([same_val_col]).groups.items():
 #         if len(inds) > 1:
-            
-            
+
+
 def remove_outlier(df_in, col_name):
     q1 = df_in[col_name].quantile(0.25)
     q3 = df_in[col_name].quantile(0.75)
@@ -56,9 +56,9 @@ def sleep_between(start=2, end=4):
     from numpy import random
     from time import sleep
     sleeptime = random.uniform(start, end)
-    print("sleeping for:", sleeptime, "seconds")
+    print("sleeping for: {:.2f} seconds".format(sleeptime))
     sleep(sleeptime)
-    print("sleeping is over")
+    # print("sleeping is over")
     return
 
 
@@ -72,6 +72,23 @@ def process_nadlan_deals_df_from_one_city(df):
     # calculate squared meters per room:
     df['M2_per_ROOM'] = df['DEALNATURE'] / df['ASSETROOMNUM']
     return df
+
+
+def concat_all_nadlan_deals_from_all_cities_and_save(nadlan_path=work_david/'Nadlan_deals',
+                                                     savepath=None,
+                                                     delete_files=False):
+    from Migration_main import path_glob
+    import numpy as np
+    files = path_glob(nadlan_path, 'Nadlan_deals_city_*_street_*.csv')
+    city_codes = [x.as_posix().split('/')[-1].split('_')[3] for x in files]
+    city_codes = np.unique(city_codes)
+    print('found {} city codes: {}'.format(len(city_codes), ', '.join(city_codes)))
+    for city_code in sorted(city_codes):
+        concat_all_nadlan_deals_from_one_city_and_save(nadlan_path=nadlan_path,
+                                                       city_code=int(city_code),
+                                                       savepath=savepath,
+                                                       delete_files=delete_files)
+    return
 
 
 def concat_all_nadlan_deals_from_one_city_and_save(nadlan_path=work_david/'Nadlan_deals',
@@ -122,15 +139,17 @@ def concat_all_nadlan_deals_from_one_city_and_save(nadlan_path=work_david/'Nadla
 def get_all_nadlan_deals_from_one_city(path=work_david, city_code=5000,
                                        savepath=None, sleep_between_streets=True):
     import pandas as pd
-    df = read_street_city_names(path=path)
+    df = read_street_city_names(path=path, filter_neighborhoods=True)
     streets_df = get_all_streets_from_df(df, city_code)
     bad_streets_df = pd.DataFrame()
+    all_streets = len(streets_df)
+    cnt = 1
     for i, row in streets_df.iterrows():
         city_name = row['city_name']
         street_name = row['street_name']
         street_code = row['street_code']
-        print('getting nadlan deals for city: {} and street: {}'.format(
-            city_name, street_name))
+        print('Fetching Nadlan deals, city: {} , street: {} ({} out of {})'.format(
+            city_name, street_name), cnt, all_streets)
         df = get_all_historical_nadlan_deals(
             city=city_name, street=street_name, city_code=city_code,
             street_code=street_code, savepath=savepath, sleep_between_streets=True)
@@ -146,6 +165,7 @@ def get_all_nadlan_deals_from_one_city(path=work_david, city_code=5000,
         if sleep_between_streets:
             sleep_between(1, 5)
     print('Done scraping {} city () from nadlan.gov.il'.format(city_name, city_code))
+    cnt += 1
     if savepath is not None:
         filename = 'Nadlan_missing_streets_{}.csv'.format(city_code)
         bad_streets_df.to_csv(savepath/filename)
@@ -162,11 +182,13 @@ def get_all_streets_from_df(df, city_code=5000):
     return df[df['city_code'] == city_code]
 
 
-def read_street_city_names(path=work_david):
+def read_street_city_names(path=work_david, filter_neighborhoods=True):
     import pandas as pd
     df = pd.read_csv(path/'street_names_israel.csv', encoding="cp1255")
     df.columns = ['city_code', 'city_name', 'street_code', 'street_name']
     df['city_name'] = df['city_name'].str.replace('תל אביב - יפו', 'תל אביב יפו')
+    if filter_neighborhoods:
+        df = df[df['street_code'] <= 5999]
     return df
 
 
@@ -304,7 +326,7 @@ def get_all_historical_nadlan_deals(city='רעננה', street='אחוזה',
         loc_df_street.index = ind
         locs.append(loc_df_street)
         if sleep_between_streets:
-            sleep_between(0.2, 1)
+            sleep_between(0.2, 0.6)
     loc_df_street = pd.concat(locs, axis=0)
     df = pd.concat([df, loc_df_street.sort_index()], axis=1)
     # fill in district and city, street:
