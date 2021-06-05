@@ -144,15 +144,22 @@ def concat_all_nadlan_deals_from_one_city_and_save(nadlan_path=work_david/'Nadla
 
 
 def get_all_nadlan_deals_from_one_city(path=work_david, city_code=5000,
-                                       savepath=None, sleep_between_streets=[1,  5]):
+                                       savepath=None,
+                                       sleep_between_streets=[1,  5],
+                                       start_from_street_code=None):
     """gets all nadlan deals for specific city from nadlan.gov.il"""
     import pandas as pd
     df = read_street_city_names(path=path, filter_neighborhoods=True)
     streets_df = df[df['city_code'] == city_code]
+    st_df = streets_df.reset_index(drop=True)
+    if start_from_street_code is not None:
+        ind = st_df[st_df['street_code']==start_from_street_code].index
+        st_df = st_df.iloc[ind[0]:]
+        print('Starting from street {} for city {}'.format(st_df.iloc[0]['street_name'], st_df.iloc[0]['city_name']))
     bad_streets_df = pd.DataFrame()
-    all_streets = len(streets_df)
+    all_streets = len(st_df)
     cnt = 1
-    for i, row in streets_df.iterrows():
+    for i, row in st_df.iterrows():
         city_name = row['city_name']
         street_name = row['street_name']
         street_code = row['street_code']
@@ -249,7 +256,7 @@ def post_nadlan_rest(body):
     url = 'https://www.nadlan.gov.il/Nadlan.REST/Main/GetAssestAndDeals'
     r = requests.post(url, json=body)
     if r.status_code != 200:
-        raise ValueError('couldnt get a response.')
+        raise ValueError('couldnt get a response ({}).'.format(r.status_code))
     result = r.json()
     if not result['AllResults']:
         raise TypeError('no results found')
@@ -310,14 +317,26 @@ def get_all_historical_nadlan_deals(city='רעננה', street='אחוזה',
     page_dfs = []
     cnt = 1
     last_page = False
+    no_results = False
     while not last_page:
         print('Page : ', cnt)
         try:
             result = post_nadlan_rest(body)
         except TypeError:
+            no_results = True
+            # if cnt > 1:
+                # pass
+            # else:
             return pd.DataFrame()
         except ValueError:
-            pass
+            no_results = True
+            # if cnt > 1:
+            # else:
+            # return pd.DataFrame()
+        if no_results and cnt > 1:
+            last_page = True
+        elif no_results and cnt == 1:
+            return pd.DataFrame()
         page_dfs.append(parse_one_json_nadlan_page_to_pandas(
             result, city_code, street_code))
         cnt += 1
@@ -325,6 +344,7 @@ def get_all_historical_nadlan_deals(city='רעננה', street='אחוזה',
             last_page = True
         else:
             body['PageNo'] += 1
+        no_results = False
     df = pd.concat(page_dfs)
     df = df.reset_index()
     df = df.sort_index()
