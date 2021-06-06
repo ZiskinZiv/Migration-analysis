@@ -34,6 +34,19 @@ level_dict = {
     'city': {'source': 'Out_ID_new', 'target': 'In_ID_new'}
 }
 
+
+def remove_outlier(df_in, col_name, k=1.5):
+    """remove outlier using iqr criterion (k=1.5)"""
+    q1 = df_in[col_name].quantile(0.25)
+    q3 = df_in[col_name].quantile(0.75)
+    iqr = q3-q1  # Interquartile range
+    fence_low = q1 - k * iqr
+    fence_high = q3 + k * iqr
+    df_out = df_in.loc[(df_in[col_name] > fence_low) &
+                       (df_in[col_name] < fence_high)]
+    return df_out
+
+
 def path_glob(path, glob_str='*.nc', return_empty_list=False):
     """returns all the files with full path(pathlib3 objs) if files exist in
     path, if not, returns FilenotFoundErro"""
