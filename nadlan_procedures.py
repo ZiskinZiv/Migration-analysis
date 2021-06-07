@@ -89,7 +89,7 @@ def process_nadlan_deals_df_from_one_city(df):
     import numpy as np
     df = df.reset_index(drop=True)
     # first, drop some cols:
-    df = df.drop(['NEWPROJECTTEXT', 'PROJECTNAME', 'KEYVALUE', 'TYPE',
+    df = df.drop(['NEWPROJECTTEXT', 'PROJECTNAME', 'TYPE',
                   'POLYGON_ID', 'TREND_IS_NEGATIVE', 'TREND_FORMAT',
                   'ObjectID', 'DescLayerID'], axis=1)
     # now convert to geodataframe using X and Y:
@@ -153,6 +153,109 @@ def concat_all_nadlan_deals_from_all_cities_and_save(nadlan_path=work_david/'Nad
                                                        savepath=savepath,
                                                        delete_files=delete_files)
     return
+
+
+def post_nadlan_historic_deals(keyvalue):
+    """take keyvalue from body or df fields and post to nadlan.gov.il deals
+    REST API historic deals"""
+    import requests
+    url = 'https://www.nadlan.gov.il/Nadlan.REST/Main/GetAllAssestHistoryDeals'
+    r = requests.post(url, json=str(keyvalue))
+    if r.status_code != 200:
+        raise ValueError('couldnt get a response ({}).'.format(r.status_code))
+    result = r.json()
+    if not result:
+        raise TypeError('no results found')
+    return result
+
+
+def get_historic_deals_for_city_code(main_path=nadlan_path, city_code=8700):
+    from Migration_main import path_glob
+    import os
+    import pandas as pd
+    streets = path_glob(main_path / str(city_code), 'Nadlan_deals_city_{}_street_*.csv'.format(city_code))
+    # check for the h suffix and filter these files out (already done historic):
+    streets = [x for x in streets if '_h' not in x.as_posix().split('/')[-1]]
+    print('Found {} streets to check.'.format(len(streets)))
+    cnt = 1
+    for street in streets:
+        df = pd.read_csv(street, na_values='None')
+        df = get_historic_nadlan_deals_from_a_street_df(df, unique=True)
+        filename = street.as_posix().split('.')[0] + '_h.csv'
+        if not df.empty:
+            df.to_csv(filename, na_rep='None', index=False)
+            print('File was rewritten ({} out of {}).'.format(cnt, len(streets)))
+            # delete old file:
+            street.unlink()
+        else:
+            print('skipping and renaming ({} of out {})'.format(cnt, len(streets)))
+            os.rename(street.as_posix(), filename)
+        cnt += 1
+    print('Done fetching historic deals for {}.'.format(city_code))
+    return
+
+
+def get_historic_nadlan_deals_from_a_street_df(df, unique=True):
+    import pandas as pd
+    import numpy as np
+    # first get the unique dataframe of KEYVALUE (should be the same)
+    if unique:
+        df = df.sort_index().groupby('KEYVALUE').filter(lambda group: len(group) == 1)
+    df['DEALDATETIME'] = pd.to_datetime(df['DEALDATETIME'])
+    city = df['City'].iloc[0]
+    street = df['Street'].iloc[0]
+    total_keys = len(df)
+    print('Fetching historic deals on {} street in {} (total {} assets).'.format(street, city, total_keys))
+    cnt = 0
+    dfs = []
+    for i, row in df.iterrows():
+        keyvalue = row['KEYVALUE']
+        city_code = row['city_code']
+        street_code = row['street_code']
+        other_fields = row.loc['ObjectID': 'Street']
+        try:
+            result = post_nadlan_historic_deals(keyvalue)
+            dfh_key = parse_one_json_nadlan_page_to_pandas(result, city_code,
+                                                           street_code,
+                                                           historic=True)
+            other_df = pd.DataFrame().append(
+                [other_fields.to_frame().T] * len(dfh_key), ignore_index=True)
+            dfs.append(pd.concat([dfh_key, other_df], axis=1))
+            sleep_between(0.1, 0.15)
+            cnt += 1
+        except TypeError:
+            sleep_between(0.01, 0.05)
+            continue
+        except ValueError:
+            sleep_between(0.01, 0.05)
+            continue
+    print('Found {} assets with historic deals out of {}.'.format(cnt, total_keys))
+    try:
+        dfh = pd.concat(dfs)
+    except ValueError:
+        print('No hitoric deals found for {}, skipping...'.format(street))
+        return pd.DataFrame()
+    dfh = dfh.reset_index()
+    dfh = dfh.sort_index()
+    df_new = pd.concat([df, dfh], axis=0)
+    df_new.replace(to_replace=[None], value=np.nan, inplace=True)
+    df_new = df_new.sort_values('GUSH')
+    df_new = df_new.reset_index(drop=True)
+    # try to fill in missing description from current deals:
+    grps = df_new.groupby('GUSH').groups
+    for gush, ind in grps.items():
+        if len(ind) > 1:
+            desc = df_new.loc[ind, 'DEALNATUREDESCRIPTION'].dropna()
+            try:
+                no_nan_desc = desc.values[0]
+            except IndexError:
+                no_nan_desc = np.nan
+            df_new.loc[ind, 'DEALNATUREDESCRIPTION'] = df_new.loc[ind,
+                                                                  'DEALNATUREDESCRIPTION'].fillna(no_nan_desc)
+    # finally make sure that we don't add duplicate deals:
+    cols = df_new.loc[:, 'DEALAMOUNT':'TREND_FORMAT'].columns
+    df_new = df_new.drop_duplicates(subset=df_new.columns.difference(cols))
+    return df_new
 
 
 def concat_all_nadlan_deals_from_one_city_and_save(nadlan_path=work_david/'Nadlan_deals',
@@ -270,10 +373,14 @@ def get_all_city_codes_from_largest_to_smallest(path=work_david):
     return city_codes
 
 
-def parse_one_json_nadlan_page_to_pandas(page, city_code=None, street_code=None):
+def parse_one_json_nadlan_page_to_pandas(page, city_code=None,
+                                         street_code=None, historic=False):
     """parse one request of nadlan deals JSON to pandas"""
     import pandas as pd
-    df = pd.DataFrame(page['AllResults'])
+    if historic:
+        df = pd.DataFrame(page)
+    else:
+        df = pd.DataFrame(page['AllResults'])
     # df.set_index('DEALDATETIME', inplace=True)
     # df.index = pd.to_datetime(df.index)
     df['DEALDATETIME'] = pd.to_datetime(df['DEALDATETIME'])
