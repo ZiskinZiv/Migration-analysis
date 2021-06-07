@@ -62,11 +62,11 @@ def plot_deal_amount_room_number(df, room_min=2, room_max=5,
     df = df.loc[(df['ASSETROOMNUM'] >= room_min) &
                 (df['ASSETROOMNUM'] <= room_max)]
     df = df.loc[yrmin:yrmax]
-    city_code = df.loc[:, 'city_code'][0]
+    city_code = df.loc[:, 'city_code'].unique()[0]
     df = df.rename({'ASSETROOMNUM': 'Rooms', 'DEALAMOUNT': 'Price'}, axis=1)
     df['Price'] /= 1000000
     fig, ax = plt.subplots(figsize=(10, 8))
-    ax = sns.lineplot(data=df, x=df.index.year, y='Price', hue='Rooms',
+    ax = sns.lineplot(data=df, x=df['DEALDATETIME'].dt.year, y='Price', hue='Rooms',
                       ci='sd', ax=ax, palette='Set1')
     ax.grid(True)
     ax.set_xlabel('')
@@ -127,6 +127,7 @@ def process_nadlan_deals_df_from_one_city(df):
     df = remove_outlier(df, 'DEALAMOUNT')
     # calculate squared meters per room:
     df['M2_per_ROOM'] = df['DEALNATURE'] / df['ASSETROOMNUM']
+    df['NIS_per_M2'] = df['DEALAMOUNT'] / df['DEALNATURE']
     # try to guess new buildings:
     df['New'] = df['BUILDINGYEAR'] == df['DEALDATETIME'].dt.year
     df['Age'] = df['DEALDATETIME'].dt.year - df['BUILDINGYEAR']
