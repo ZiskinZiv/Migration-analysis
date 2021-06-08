@@ -111,7 +111,7 @@ def process_nadlan_deals_df_from_one_city(df):
     # now try to add CBS statistical areas for each address coords:
     stats = read_statistical_areas_gis_file()
     stats = stats[stats['city_code'] == df['city_code'].iloc[0]]
-    # so iterate over stats geodataframe and check if asset coords are 
+    # so iterate over stats geodataframe and check if asset coords are
     # within the stat area polygon (also all population 2019):
     # use the same loop to to input the social economic index from CBS:
     SEI = read_social_economic_index()
@@ -187,15 +187,20 @@ def get_historic_deals_for_city_code(main_path=nadlan_path, city_code=8700):
     from Migration_main import path_glob
     import os
     import pandas as pd
+    # from pathlib import Path
     streets = path_glob(main_path / str(city_code), 'Nadlan_deals_city_{}_street_*.csv'.format(city_code))
     # check for the h suffix and filter these files out (already done historic):
     streets = [x for x in streets if '_h' not in x.as_posix().split('/')[-1]]
     print('Found {} streets to check.'.format(len(streets)))
     cnt = 1
     for street in streets:
+        filename = street.as_posix().split('.')[0] + '_h.csv'
+        # if Path(filename).is_file():
+        #     print('{} already exists, skipping...'.format(filename))
+        #     cnt += 1
+        #     continue
         df = pd.read_csv(street, na_values='None')
         df = get_historic_nadlan_deals_from_a_street_df(df, unique=True)
-        filename = street.as_posix().split('.')[0] + '_h.csv'
         if not df.empty:
             df.to_csv(filename, na_rep='None', index=False)
             print('File was rewritten ({} out of {}).'.format(cnt, len(streets)))
