@@ -188,7 +188,7 @@ def get_historic_deals_for_city_code(main_path=nadlan_path, city_code=8700):
     import os
     import pandas as pd
     # from pathlib import Path
-    streets = path_glob(main_path / str(city_code), 'Nadlan_deals_city_{}_street_*.csv'.format(city_code))
+    streets = path_glob(main_path / str(city_code), 'Nadlan_deals_city_{}_street*.csv'.format(city_code))
     # check for the h suffix and filter these files out (already done historic):
     streets = [x for x in streets if '_h' not in x.as_posix().split('/')[-1]]
     print('Found {} streets to check.'.format(len(streets)))
@@ -393,7 +393,9 @@ def get_all_city_codes_from_largest_to_smallest(path=work_david):
 
 
 def parse_one_json_nadlan_page_to_pandas(page, city_code=None,
-                                         street_code=None, historic=False):
+                                         street_code=None,
+                                         historic=False,
+                                         keep_no_address=False):
     """parse one request of nadlan deals JSON to pandas"""
     import pandas as pd
     if historic:
@@ -410,6 +412,8 @@ def parse_one_json_nadlan_page_to_pandas(page, city_code=None,
         df['city_code'] = city_code
     if street_code is not None:
         df['street_code'] = street_code
+    if keep_no_address:
+        df = df[df['FULLADRESS']=='']
     return df
 
 
@@ -476,6 +480,92 @@ def parse_body_request_to_dataframe(body):
         df = pd.concat([df, nav_df], axis=1)
     df['X'] = pd.to_numeric(df['X'])
     df['Y'] = pd.to_numeric(df['Y'])
+    return df
+
+
+def get_all_no_street_nadlan_deals_from_settelment(city_code=1324,
+                                                   pop_warn=5000, savepath=None):
+    import os
+    city_codes = get_all_city_codes_from_largest_to_smallest()
+    city_name = city_codes.loc[city_code]['NameHe']
+    if pop_warn is not None:
+        pop = city_codes.loc[city_code]['Pop2015']
+        if pop >= pop_warn:
+            raise ValueError('population of {} is {} (>={})!'.format(city_name, pop, pop_warn))
+    if not savepath.is_dir():
+        print('Folder {} not found...Creating it.'.format(savepath))
+        os.mkdir(savepath)
+    get_all_no_street_nadlan_deals(city=city_name, city_code=city_code, savepath=savepath)
+    return
+
+
+def get_all_no_street_nadlan_deals(city='ארסוף', city_code=1324,
+                                   savepath=None, check_for_downloaded_files=True):
+    import pandas as pd
+    import numpy as np
+    from json import JSONDecodeError
+    from Migration_main import path_glob
+    print('Fetching all NO streets nadlan deals in {} ({})'.format(city, city_code))
+    if check_for_downloaded_files and savepath is not None:
+        try:
+            file = path_glob(savepath, 'Nadlan_deals_city_{}_no_streets_*.csv'.format(city_code))
+            print('{} already found, skipping...'.format(file))
+            return pd.DataFrame()
+        except FileNotFoundError:
+            pass
+    try:
+        body = produce_nadlan_rest_request(full_address=city)
+    except TypeError:
+        return None
+    if body['DescLayerID'] != 'SETL_MID_POINT':
+        print('searched term {} did not result in settelment but something else...'.format(city))
+        return None
+    page_dfs = []
+    cnt = 1
+    last_page = False
+    no_results = False
+    while not last_page:
+        print('Page : ', cnt)
+        try:
+            result = post_nadlan_rest(body)
+        except TypeError:
+            no_results = True
+            return pd.DataFrame()
+        except ValueError:
+            no_results = True
+            # if cnt > 1:
+            # else:
+            # return pd.DataFrame()
+        if no_results and cnt > 1:
+            last_page = True
+        elif no_results and cnt == 1:
+            return pd.DataFrame()
+        page_dfs.append(parse_one_json_nadlan_page_to_pandas(
+            result, city_code, np.nan, keep_no_address=True))
+        cnt += 1
+        if result['IsLastPage']:
+            last_page = True
+        else:
+            body['PageNo'] += 1
+        no_results = False
+    df = pd.concat(page_dfs)
+    df = df.reset_index()
+    df = df.sort_index()
+    # now some geocoding:
+    loc_df = parse_body_request_to_dataframe(body)
+    loc_df = loc_df.append([loc_df]*(len(df) - 1), ignore_index=True)
+    df = pd.concat([df, loc_df], axis=1)
+    # fill in district and city, street:
+    df.loc[:, 'District'] = 'None'
+    df.loc[:, 'City'] = city
+    df.loc[:, 'Street'] = 'None'
+    if savepath is not None:
+        yrmin = df['DEALDATETIME'].min().year
+        yrmax = df['DEALDATETIME'].max().year
+        filename = 'Nadlan_deals_city_{}_no_streets_{}-{}.csv'.format(
+            city_code, yrmin, yrmax)
+        df.to_csv(savepath/filename, na_rep='None')
+        print('{} was saved to {}.'.format(filename, savepath))
     return df
 
 
