@@ -13,6 +13,51 @@ Created on Sun Jun  6 11:37:53 2021
 from MA_paths import work_david
 nadlan_path = work_david / 'Nadlan_deals'
 
+intel_kiryat_gat = [31.599645, 34.785265]
+
+def transform_lat_lon_point_to_new_israel(lat, lon):
+    from pyproj import Transformer
+    from shapely.geometry import Point
+    transformer = Transformer.from_crs("EPSG:4326", "EPSG:2039")
+    p = transformer.transform(lon, lat)
+    return Point(p)
+
+intel_kiryat_gat_ITM = transform_lat_lon_point_to_new_israel(34.785265, 31.599645)
+
+
+def produce_dfs_for_circles_around_point(point=intel_kiryat_gat_ITM,
+                                         path=work_david, point_name='Intel_kiryat_gat',
+                                         nadlan_path=nadlan_path,
+                                         min_dis=0, max_dis=10, savepath=None):
+    from Migration_main import path_glob
+    from cbs_procedures import geo_location_settelments_israel
+    import pandas as pd
+    print('Producing nadlan deals with cities around point {} with radii of {} to {} kms.'.format(point, min_dis, max_dis))
+    df = geo_location_settelments_israel(path)
+    df_radii = filter_df_with_distance_from_point(df, point,
+                                                  min_distance=min_dis, max_distance=max_dis)
+    cities_radii = [x for x in df_radii['city_code']]
+    files = path_glob(nadlan_path, '*/')
+    available_city_codes = [x.as_posix().split('/')[-1] for x in files]
+    available_city_codes = [int(x) for x in available_city_codes if x.isdigit()]
+    dfs = []
+    cnt = 1
+    for city_code in cities_radii:
+        if city_code in available_city_codes:
+            print(city_code)
+            # print('found {} city.'.format(city_code))
+            df = concat_all_nadlan_deals_from_one_city_and_save(city_code=int(city_code))
+            if not df.empty:
+                dfs.append(df)
+                cnt += 1
+    print('found total {} cities within {}-{} km radius.'.format(cnt, min_dis, max_dis))
+    df = pd.concat(dfs, axis=0)
+    if savepath is not None:
+        filename = 'Nadlan_deals_around_{}_{}-{}.csv'.format(point_name, min_dis, max_dis)
+        df.to_csv(savepath/filename, na_rep='None', index=False)
+        print('{} was saved to {}.'.format(filename, savepath))
+    return df
+
 # def convert_headers_to_dict(filepath):
 #     f = open(filepath, "r")
 #     lines = f.readlines()
@@ -38,7 +83,22 @@ nadlan_path = work_david / 'Nadlan_deals'
 
 # def fill_in_missing_str_in_the_same_col(df, same_val_col='GUSH', missin_col='Neighborhood'):
 #     for group, inds in df.groupby([same_val_col]).groups.items():
-#         if len(inds) > 1:
+
+    #         if len(inds) > 1:
+
+
+def filter_df_with_distance_from_point(df, point, min_distance=0,
+                                       max_distance=10):
+    import geopandas as gpd
+    # ditance is in kms, but calculation is in meters:
+    if not isinstance(df, gpd.GeoDataFrame):
+        print('dataframe is not GeoDataFrame!')
+        return
+    print('fitering nadlan deals from {} to {} km distance from {}'.format(min_distance, max_distance, point))
+    df['distance_to_point'] = df.distance(point) / 1000.0
+    df = df.loc[(df['distance_to_point'] >= min_distance) &
+                (df['distance_to_point'] < max_distance)]
+    return df
 
 
 def sleep_between(start=2, end=4):
@@ -53,6 +113,7 @@ def sleep_between(start=2, end=4):
 
 
 def keep_only_historic_changed_assets(df):
+    df = df.reset_index(drop=True)
     grps = df.groupby('GUSH').groups
     inds = []
     for gush, ind in grps.items():
@@ -102,9 +163,9 @@ def process_nadlan_deals_df_from_one_city(df):
     import numpy as np
     df = df.reset_index(drop=True)
     # first, drop some cols:
-    df = df.drop(['NEWPROJECTTEXT', 'PROJECTNAME', 'TYPE',
-                  'POLYGON_ID', 'TREND_IS_NEGATIVE', 'TREND_FORMAT',
-                  'ObjectID', 'DescLayerID'], axis=1)
+    # df = df.drop(['NEWPROJECTTEXT', 'PROJECTNAME', 'TYPE',
+    #               'POLYGON_ID', 'TREND_IS_NEGATIVE', 'TREND_FORMAT',
+    #               'ObjectID', 'DescLayerID'], axis=1)
     # now convert to geodataframe using X and Y:
     df = gpd.GeoDataFrame(df, geometry=gpd.points_from_xy(df['X'], df['Y']))
     df.crs = {'init': 'epsg:2039'}
@@ -283,11 +344,15 @@ def concat_all_nadlan_deals_from_one_city_and_save(nadlan_path=work_david/'Nadla
                                                    delete_files=False):
     """concat all nadlan deals for all streets in a specific city"""
     import pandas as pd
+    import numpy as np
     from Migration_main import path_glob
     import click
     city_path = nadlan_path / str(city_code)
-    files = path_glob(
-        city_path, 'Nadlan_deals_city_{}_street_*.csv'.format(city_code))
+    try:
+        files = path_glob(
+            city_path, 'Nadlan_deals_city_{}_*street*.csv'.format(city_code))
+    except FileNotFoundError:
+        return pd.DataFrame()
     dfs = [pd.read_csv(file, na_values='None') for file in files]
     df = pd.concat(dfs)
     df['DEALDATETIME'] = pd.to_datetime(df['DEALDATETIME'])
@@ -296,11 +361,14 @@ def concat_all_nadlan_deals_from_one_city_and_save(nadlan_path=work_david/'Nadla
     df = df.sort_index()
     df = df.iloc[:, 2:]
     # first drop records with no full address:
-    df = df[~df['FULLADRESS'].isna()]
+    # df = df[~df['FULLADRESS'].isna()]
     # now go over all the unique GUSHs and fill in the geoloc codes if missing
     # and then drop duplicates
     # good_district = df['District'].unique()[df['District'].unique() != ''][0]
-    good_district = df['District'].value_counts().index[0]
+    try:
+        good_district = df['District'].value_counts().index[0]
+    except IndexError:
+        good_district = np.nan
     good_city = df['City'].value_counts().index[0].strip()
     df = df.copy()
     if not pd.isnull(good_district):
@@ -311,8 +379,8 @@ def concat_all_nadlan_deals_from_one_city_and_save(nadlan_path=work_david/'Nadla
     # take care of street_code columns all but duplicates bc of neighhood code/street code:
     df = df.drop_duplicates(subset=df.columns.difference(['street_code', 'Street']))
     # lasty, extract Building number from FULLADRESS and is NaN remove record:
-    df['Building'] = df['FULLADRESS'].str.extract('(\d+)')
-    df = df[~df['Building'].isna()]
+    df['Building'] = df['FULLADRESS'].astype(str).str.extract('(\d+)')
+    # df = df[~df['Building'].isna()]
     if savepath is not None:
         yrmin = df.index.min().year
         yrmax = df.index.max().year
