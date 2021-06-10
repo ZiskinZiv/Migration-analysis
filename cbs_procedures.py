@@ -13,6 +13,20 @@ Created on Tue May 11 11:44:45 2021
 from MA_paths import work_david
 
 
+def geo_location_settelments_israel(path=work_david):
+    import pandas as pd
+    import geopandas as gpd
+    df = pd.read_csv(path/'Israel_setlmidpoint.csv',
+                     encoding="cp1255", na_values='<Null>')
+    df.columns = ['city_code', 'NameHe', 'NameEn', 'city_type', 'X', 'Y', 'data_year', 'data_version']
+    df['city_type'] = df['city_type'].str.replace('יישוב עירוני', 'urban')
+    df['city_type'] = df['city_type'].str.replace('יישוב כפרי', 'rural')
+    df['city_type'] = df['city_type'].str.replace('מקום', 'place')
+    df['city_type'] = df['city_type'].str.replace('מוקד תעסוקה', 'employment center')
+    df = gpd.GeoDataFrame(df, geometry=gpd.points_from_xy(df['X'], df['Y']))
+    return df
+
+
 def read_social_economic_index(path=work_david):
     import pandas as pd
     df = pd.read_excel(
