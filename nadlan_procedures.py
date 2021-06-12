@@ -571,7 +571,9 @@ def get_all_no_street_nadlan_deals(city='ארסוף', city_code=1324,
                                    savepath=None, check_for_downloaded_files=True):
     import pandas as pd
     import numpy as np
-    from json import JSONDecodeError
+    import os
+    # from json import JSONDecodeError
+    # from requests.exceptions import ConnectionError
     from Migration_main import path_glob
     print('Fetching all NO streets nadlan deals in {} ({})'.format(city, city_code))
     if check_for_downloaded_files and savepath is not None:
@@ -588,8 +590,18 @@ def get_all_no_street_nadlan_deals(city='ארסוף', city_code=1324,
     if body['DescLayerID'] != 'SETL_MID_POINT':
         print('searched term {} did not result in settelment but something else...'.format(city))
         return None
+    try:
+        page_files = path_glob(savepath/'page_temp', 'Nadlan_deals_city_{}_no_streets_page_*.csv'.format(city_code))
+        pages = [x.as_posix().split('/')[-1].split('.')[0].split('_')[-1] for x in page_files]
+        pages = sorted([int(x) for x in pages])
+        cnt = int(pages[-1])
+        print(cnt)
+    except FileNotFoundError:
+        cnt = 1
+        pass
+
     page_dfs = []
-    cnt = 1
+    # cnt = 1
     last_page = False
     no_results = False
     while not last_page:
@@ -608,14 +620,26 @@ def get_all_no_street_nadlan_deals(city='ארסוף', city_code=1324,
             last_page = True
         elif no_results and cnt == 1:
             return pd.DataFrame()
-        page_dfs.append(parse_one_json_nadlan_page_to_pandas(
-            result, city_code, np.nan, keep_no_address=True))
+        filename = 'Nadlan_deals_city_{}_no_streets_page_{}.csv'.format(
+                city_code, cnt)
+        df1 = parse_one_json_nadlan_page_to_pandas(
+                result, city_code, np.nan, keep_no_address=True)
+        if not df1.empty:
+            if not (savepath/'page_temp').is_dir():
+                os.mkdir(savepath/'page_temp')
+                print('{} was created.'.format(savepath/'page_temp'))
+            df1.to_csv(savepath/'page_temp'/filename, na_rep='None')
+            print('Page {} was saved to {}.'.format(cnt, savepath))
+        page_dfs.append(df1)
         cnt += 1
         if result['IsLastPage']:
             last_page = True
         else:
             body['PageNo'] += 1
         no_results = False
+    # now after finished, find all temp pages and concat them:
+    page_files = path_glob(savepath/'page_temp', 'Nadlan_deals_city_{}_no_streets_page_*.csv'.format(city_code))
+    page_dfs = [pd.read_csv(x, na_values=np.nan, parse_dates=['DEALDATETIME']) for x in page_files]
     df = pd.concat(page_dfs)
     df = df.reset_index()
     df = df.sort_index()
