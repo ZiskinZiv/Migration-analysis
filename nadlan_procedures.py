@@ -58,6 +58,44 @@ def produce_dfs_for_circles_around_point(point=intel_kiryat_gat_ITM,
         print('{} was saved to {}.'.format(filename, savepath))
     return df
 
+
+def tries_requests_example():
+    from requests.exceptions import RequestException, ConnectionError
+    tries = 100
+    for i in range(tries):
+        try:
+            for file in files:
+                city_code=file.as_posix().split('/')[-1]
+                try:
+                    get_historic_deals_for_city_code(city_code=city_code)
+                except FileNotFoundError:
+                    continue
+        except ConnectionError:
+            if i<tries -1:
+                print('retrying...')
+                sleep_between(5, 10)
+                continue
+            else:
+                raise
+            break
+
+    # this one worked:
+    tries = 100
+    for i in range(tries):
+        try:
+            for c in reversed(cc):
+                try:
+                    get_all_no_street_nadlan_deals_from_settelment(city_code=c, savepath=nadlan_path/str(c),pop_warn=None)
+                except UnboundLocalError:
+                    continue
+        except RequestException:
+            if i< tries -1:
+                print('retrying...')
+                sleep_between(5,10)
+                continue
+            else:
+                raise
+        break
 # def convert_headers_to_dict(filepath):
 #     f = open(filepath, "r")
 #     lines = f.readlines()
@@ -599,7 +637,7 @@ def get_all_no_street_nadlan_deals(city='ארסוף', city_code=1324,
     except FileNotFoundError:
         cnt = 1
         pass
-
+    body['PageNo'] = cnt
     page_dfs = []
     # cnt = 1
     last_page = False
