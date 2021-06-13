@@ -124,6 +124,61 @@ def tries_requests_example():
 
     #         if len(inds) > 1:
 
+        
+def get_address_using_PARCEL_ID(parcel_id='596179', return_first_address=True):
+    import requests
+    import pandas as pd
+    body = {'locateType': 3, 'whereValues': ["PARCEL_ID", parcel_id, "number"]}
+    url = 'https://ags.govmap.gov.il/Search/SearchLocate'
+    r = requests.post(url, json=body)
+    df = pd.DataFrame(r.json()['data']['Values'])
+    city = [x[0] for x in df['Values']]
+    street = [x[1] for x in df['Values']]
+    building = [int(x[2]) for x in df['Values']]
+    df['City'] = city
+    df['Street'] = street
+    df['Building'] = building
+    fa = []
+    for i, row in df.iterrows():
+        bi = row['Building']
+        ci = row['City']
+        st = row['Street']
+        fa.append('{} {}, {}'.format(st, bi, ci))
+    df['FULLADRESS'] = fa
+    df.drop(['Values','Created','IsEditable'], axis=1, inplace=True)
+    if return_first_address:
+        return df.iloc[0]
+    else:
+        return df
+
+
+def get_XY_coords_using_GUSH(GUSH='1533-149-12', get_address_too=True):
+    import requests
+    g = GUSH.split('-')
+    lot = g[0]  # גוש
+    parcel = g[1]  # חלקה
+    url = 'https://es.govmap.gov.il/TldSearch/api/DetailsByQuery?query=גוש {} חלקה {}&lyrs=262144&gid=govmap'.format(
+        lot, parcel)
+    r = requests.get(url)
+    rdict = r.json()
+    if rdict['ErrorMsg'] is not None:
+        raise ValueError('could not find coords for {}: {}'.format(
+            GUSH, rdict['ErrorMsg']))
+    else:
+        assert rdict['data']['GOVMAP_PARCEL_ALL'][0]['AData']['GUSH_NUM'] == lot
+        assert rdict['data']['GOVMAP_PARCEL_ALL'][0]['AData']['PARCEL'] == parcel
+        X = rdict['data']['GOVMAP_PARCEL_ALL'][0]['X']
+        Y = rdict['data']['GOVMAP_PARCEL_ALL'][0]['Y']
+        parcel_id = rdict['data']['GOVMAP_PARCEL_ALL'][0]['ObjectID']
+    if get_address_too:
+        df = get_address_using_PARCEL_ID(parcel_id)
+        df['X'] = X
+        df['Y'] = Y
+        df['ObjectID'] = parcel_id
+        return df
+    else:
+        return X, Y, parcel_id
+
 
 def filter_df_with_distance_from_point(df, point, min_distance=0,
                                        max_distance=10):
