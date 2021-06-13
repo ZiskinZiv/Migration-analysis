@@ -287,7 +287,7 @@ def get_historic_deals_for_city_code(main_path=nadlan_path, city_code=8700):
     import os
     import pandas as pd
     # from pathlib import Path
-    streets = path_glob(main_path / str(city_code), 'Nadlan_deals_city_{}_street*.csv'.format(city_code))
+    streets = path_glob(main_path / str(city_code), 'Nadlan_deals_city_{}_*street*.csv'.format(city_code))
     # check for the h suffix and filter these files out (already done historic):
     streets = [x for x in streets if '_h' not in x.as_posix().split('/')[-1]]
     print('Found {} streets to check.'.format(len(streets)))
