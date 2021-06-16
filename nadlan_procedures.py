@@ -2,7 +2,10 @@
 # -*- coding: utf-8 -*-
 """
 Created on Sun Jun  6 11:37:53 2021
-
+First download all nadlan deals:
+then, do concat_all and save to Nadlan_full_cities folder
+then do recover_neighborhoods_for_all_cities(recover_XY=True)
+then process each df_city
 @author: ziskin
 """
 # TODO: each call to body with street name yields district, city and street
@@ -124,7 +127,263 @@ def tries_requests_example():
 
     #         if len(inds) > 1:
 
-        
+def load_gush_parcel_shape_file(path=work_david/'gis'):
+    import geopandas as gpd
+    gdf = gpd.read_file(
+        work_david/'gis/PARCEL_ALL - Copy.shp', encoding='cp1255')
+    return gdf
+
+
+def recover_XY_using_gush_parcel_shape_file(df_all, gush_gdf):
+    import pandas as pd
+    df_all = df_all.copy().reset_index(drop=True)
+    city = df_all['City'].unique()[0]
+    df = df_all[df_all['DescLayerID'] == 'SETL_MID_POINT']
+    if df.empty:
+        print('No SETL_MID_POINT XYs were found in dataframe...')
+        return df_all
+    df['lot'] = [x[0] for x in df['GUSH'].str.split('-')]
+    df['parcel'] = [x[1] for x in df['GUSH'].str.split('-')]
+    groups = df.groupby(['lot', 'parcel']).groups
+    total = len(groups)
+    cnt_all = 0
+    cnt_gush = 0
+    print('Found {} deals with non recovered XY for city: {}.'.format(total, city))
+    # for i, (ind, row) in enumerate(df.iterrows()):
+    for i, ((lot, parcel), inds) in enumerate(groups.items()):
+        print('Fetching XY for {}-{} ({}/{}).'.format(lot, parcel, i+1, total))
+        gdf = gush_gdf.query('GUSH_NUM=={} & PARCEL=={}'.format(lot, parcel))
+        if gdf.empty:
+            print('No XY were recovered for {}-{}, trying only GUSH'.format(lot, parcel))
+            gdf = gush_gdf.query('GUSH_NUM=={}'.format(lot))
+            if gdf.empty:
+                print(
+                    'No XY were recovered for {}-{} (even GUSH)...'.format(lot, parcel))
+                continue
+            df_all.loc[inds, 'X'] = gdf.unary_union.centroid.x
+            df_all.loc[inds, 'Y'] = gdf.unary_union.centroid.y
+            df_all.loc[inds, 'DescLayerID'] = 'XY_recovered_shape_gush_only'
+            cnt_gush += 1
+        else:
+            df_all.loc[inds, 'X'] = gdf.centroid.x.item()
+            df_all.loc[inds, 'Y'] = gdf.centroid.y.item()
+            df_all.loc[inds, 'DescLayerID'] = 'XY_recovered_shape'
+            cnt_all += 1
+    print('Recovered exact {} XYs and {} GUSH XYs out of {} total records.'.format(
+        cnt_all, cnt_gush, total))
+    return df_all
+
+
+def recover_neighborhoods_for_all_cities(path=nadlan_path/'Nadlan_full_cities',
+                                         gush_file=None):
+    from Migration_main import path_glob
+    import numpy as np
+    # first run concat_all...
+    folders = path_glob(nadlan_path, '*/')
+    folders = [x for x in folders if any(i.isdigit() for i in x.as_posix())]
+    # files = path_glob(nadlan_path, 'Nadlan_deals_city_*_street_*.csv')
+    city_codes = [x.as_posix().split('/')[-1] for x in folders]
+    city_codes = sorted(np.unique(city_codes))
+    print('found {} city codes: {}'.format(len(city_codes), ', '.join(city_codes)))
+
+    for city_code in sorted(city_codes):
+        try:
+            recover_neighborhoods_for_one_city(path, city_code, gdf=gush_file)
+        except FileNotFoundError:
+            print('{} not found in {}, skipping...'.format(city_code, path))
+            continue
+    return
+
+
+def recover_neighborhoods_for_one_city(path=nadlan_path/'Nadlan_full_cities',
+                                       city_code=8700, gdf=None):
+    from Migration_main import path_glob
+    import pandas as pd
+    file = path_glob(path, 'Nadlan_deals_city_{}_all_streets_*.csv'.format(city_code))
+    file = file[0]
+    if 'recovered_neighborhoods' in file.as_posix():
+        print('{} already recovered_neighborhoods, skipping...'.format(file))
+        return
+    df = pd.read_csv(file, na_values='None')
+    if gdf is not None:
+        print('First, recovering XY using shape file:')
+        df = recover_XY_using_gush_parcel_shape_file(df, gdf)
+    print('Recovering neighborhoods in {}:'.format(city_code))
+    df = recover_neighborhood_for_df(df)
+    if df.empty:
+        print('no empty neighborhoods in {} found.'.format(city_code))
+        return
+    filename = file.as_posix().split('/')[-1]
+    filename = '_'.join(filename.split('_')[:-1]) + '_recovered_neighborhoods' + '_h.csv'
+    df.to_csv(path/filename, na_rep='None', index=False)
+    print('Successfully saved {}'.format(filename))
+    file.unlink()
+    return
+
+
+def recover_neighborhood_for_df(df_all):
+    import numpy as np
+    import pandas as pd
+    df_all = df_all.copy().reset_index(drop=True)
+    city = df_all['City'].unique()[0]
+    df = df_all[df_all['Neighborhood'].isnull()]
+    if df.empty:
+        return pd.DataFrame()
+    df['lot'] = [x[0] for x in df['GUSH'].str.split('-')]
+    df['parcel'] = [x[1] for x in df['GUSH'].str.split('-')]
+    groups = df.groupby(['lot', 'parcel']).groups
+    total = len(groups)
+    df.loc[:, 'Neighborhood'] = 'None'
+    df.loc[:, 'Neighborhood_code'] = np.nan
+    df.loc[:, 'Neighborhood_id'] = np.nan
+    cnt = 0
+    print('Found {} deals in empty neighborhoods for city: {}.'.format(total, city))
+    for i, ((lot, parcel), inds) in enumerate(groups.items()):
+        # for i, (ind, row) in enumerate(df.iterrows()):
+        print('Fetching Nieghborhood for {}-{} ({}/{}).'.format(lot, parcel, i+1, total))
+        x = df.loc[inds[0], 'X']
+        y = df.loc[inds[0], 'Y']
+        df_neigh = get_neighborhoods_area_by_XY(x, y)
+        if df_neigh.empty:
+            continue
+        cnt += 1
+        df.loc[inds, 'Neighborhood'] = df_neigh['Neighborhood'].item()
+        df.loc[inds, 'Neighborhood_code'] = df_neigh['Neighborhood_code'].item()
+        df.loc[inds, 'Neighborhood_id'] = df_neigh['Neighborhood_id'].item()
+        sleep_between(0.05, 0.1)
+    print('Recovered {} Neighborhoods out of {} total no streets records.'.format(
+        cnt, total))
+    df_all.loc[df.index, 'Neighborhood'] = df['Neighborhood']
+    df_all.loc[df.index, 'Neighborhood_code'] = df['Neighborhood_code']
+    df_all.loc[df.index, 'Neighborhood_id'] = df['Neighborhood_id']
+    return df_all
+
+
+def recover_XY_for_all_no_streets(nadlan_path=nadlan_path):
+    from Migration_main import path_glob
+    import numpy as np
+    folders = path_glob(nadlan_path, '*/')
+    folders = [x for x in folders if any(i.isdigit() for i in x.as_posix())]
+    city_codes = [x.as_posix().split('/')[-1] for x in folders]
+    city_codes = sorted(np.unique([int(x) for x in city_codes]))
+    for city_code in city_codes:
+        try:
+            recover_XY_for_one_city(nadlan_path, city_code)
+        except FileNotFoundError:
+            continue
+    print('Done recovering XY from no streets.')
+    return
+
+
+def recover_XY_for_one_city(nadlan_path=nadlan_path, city_code=8400):
+    from Migration_main import path_glob
+    import pandas as pd
+    files = sorted(path_glob(nadlan_path/str(city_code), 'Nadlan_deals_city_{}_no_streets_*_h.csv'.format(city_code)))
+    file = files[0]
+    print('processing recovery of XY in city code: {}'.format(city_code))
+    if 'recovered' not in file.as_posix() and len(files)==2:
+        file.unlink()
+        print('deleted {}'.format(file))
+        return
+    elif 'recovered' in file.as_posix() and len(files)==1:
+        print('{} already recovered, skipping...'.format(file))
+        return
+    elif 'recovered' not in file.as_posix() and len(files)==1:
+        df = pd.read_csv(file, na_values='None')
+        try:
+            df = recover_XY_address_and_neighborhoods_using_GUSH(df)
+        except AttributeError:
+            print('nan detected in {}, deleting...'.format(file))
+            file.unlink()
+            return
+        filename = file.as_posix().split('/')[-1]
+        if '_recovered' not in filename:
+            filename = '_'.join(filename.split('_')[:-1]) + '_recovered' + '_h.csv'
+        df.to_csv(nadlan_path/str(city_code)/filename, na_rep='None', index=False)
+        print('Successfully saved {}'.format(filename))
+        # if '_recovered' not in filename:
+        # now delete the old file:
+        file.unlink()
+    return
+
+
+def recover_XY_address_and_neighborhoods_using_GUSH(df_no_streets):
+    import numpy as np
+    # assume we deal with no_streets_df
+    df = df_no_streets.copy()
+    total = len(df)
+    city = df['City'].unique()[0]
+    df['Neighborhood'] = 'None'
+    df['Neighborhood_code'] = np.nan
+    df['Neighborhood_id'] = np.nan
+    cnt_arr = np.array([0, 0, 0])
+    print('Found {} no streets deals for city: {}.'.format(total, city))
+    for i, row in df_no_streets.iterrows():
+        print('Fetching X, Y for {} ({}/{}).'.format(row['GUSH'], i+1, total))
+        try:
+            x, y, parcel_id = get_XY_coords_using_GUSH(row['GUSH'])
+            df.at[i, 'X'] = x
+            df.at[i, 'Y'] = y
+            df.at[i, 'ObjectID'] = parcel_id
+            sleep_between(0.05, 0.1)
+            cnt_arr[0] += 1
+            df.at[i, 'DescLayerID'] = 'XY_recovered'
+        except ValueError:
+            print('No X, Y found for {}.'.format(row['GUSH']))
+            continue
+        try:
+            df_address = get_address_using_PARCEL_ID(parcel_id)
+            df.at[i, 'FULLADRESS'] = df_address['FULLADRESS']
+            df.at[i, 'Street'] = df_address['Street']
+            sleep_between(0.05, 0.1)
+            df.at[i, 'DescLayerID'] = 'ADDR_V1_recovered'
+            cnt_arr[1] += 1
+        except ValueError:
+            print('No address found for {}.'.format(row['GUSH']))
+            pass
+        df_neigh = get_neighborhoods_area_by_XY(x, y)
+        if df_neigh.empty:
+            continue
+        df.at[i, 'Neighborhood'] = df_neigh['Neighborhood'].item()
+        df.at[i, 'Neighborhood_code'] = df_neigh['Neighborhood_code'].item()
+        df.at[i, 'Neighborhood_id'] = df_neigh['Neighborhood_id'].item()
+        sleep_between(0.05, 0.1)
+        cnt_arr[2] += 1
+    print('Recovered {} Xys, {} Addresses and {} Neighborhoods out of {} total no streets records.'.format(
+        cnt_arr[0], cnt_arr[1], cnt_arr[2], total))
+    return df
+
+
+def get_neighborhoods_area_by_XY(X, Y):
+    import requests
+    import pandas as pd
+    body = {'x': X,
+            'y': Y,
+            'mapTolerance': 39.6875793751587,
+            'layers': [{'LayerType': 0,
+                        'LayerName': 'neighborhoods_area',
+                        'LayerFilter': ''}]}
+    url = 'https://ags.govmap.gov.il/Identify/IdentifyByXY'
+    r = requests.post(url, json=body)
+    if not r.json()['data']:
+        print('No nieghborhood found in {}, {}'.format(X, Y))
+        return pd.DataFrame()
+    results = r.json()['data'][0]['Result'][0]['tabs'][0]['fields']
+    df = pd.DataFrame(results).T
+    df.columns = ['Neighborhood', 'disc', 'City',
+                  'Neighborhood_code', 'Neighborhood_id']
+    df.drop('disc', axis=1, inplace=True)
+    df.drop(['FieldName', 'FieldType'], axis=0, inplace=True)
+    df = df.reset_index(drop=True)
+    df['Neighborhood_code'] = pd.to_numeric(
+        df['Neighborhood_code'], errors='coerce')
+    df['Neighborhood_id'] = pd.to_numeric(
+        df['Neighborhood_id'], errors='coerce')
+    print('Successfuly recovered neighborhood as {}.'.format(
+        df['Neighborhood'].item()))
+    return df
+
+
 def get_address_using_PARCEL_ID(parcel_id='596179', return_first_address=True):
     import requests
     import pandas as pd
@@ -132,6 +391,8 @@ def get_address_using_PARCEL_ID(parcel_id='596179', return_first_address=True):
     url = 'https://ags.govmap.gov.il/Search/SearchLocate'
     r = requests.post(url, json=body)
     df = pd.DataFrame(r.json()['data']['Values'])
+    if df.empty:
+        raise ValueError
     city = [x[0] for x in df['Values']]
     street = [x[1] for x in df['Values']]
     building = [int(x[2]) for x in df['Values']]
@@ -147,12 +408,13 @@ def get_address_using_PARCEL_ID(parcel_id='596179', return_first_address=True):
     df['FULLADRESS'] = fa
     df.drop(['Values','Created','IsEditable'], axis=1, inplace=True)
     if return_first_address:
+        print('Succsefully recoverd first address as {}'.format(df.iloc[0]['FULLADRESS']))
         return df.iloc[0]
     else:
         return df
 
 
-def get_XY_coords_using_GUSH(GUSH='1533-149-12', get_address_too=True):
+def get_XY_coords_using_GUSH(GUSH='1533-149-12'):
     import requests
     g = GUSH.split('-')
     lot = g[0]  # גוש
@@ -170,14 +432,15 @@ def get_XY_coords_using_GUSH(GUSH='1533-149-12', get_address_too=True):
         X = rdict['data']['GOVMAP_PARCEL_ALL'][0]['X']
         Y = rdict['data']['GOVMAP_PARCEL_ALL'][0]['Y']
         parcel_id = rdict['data']['GOVMAP_PARCEL_ALL'][0]['ObjectID']
-    if get_address_too:
-        df = get_address_using_PARCEL_ID(parcel_id)
-        df['X'] = X
-        df['Y'] = Y
-        df['ObjectID'] = parcel_id
-        return df
-    else:
-        return X, Y, parcel_id
+        print('succsesfully recoverd X, Y for {}'.format(GUSH))
+    # if get_address_too:
+    #     df = get_address_using_PARCEL_ID(parcel_id)
+    #     df['X'] = X
+    #     df['Y'] = Y
+    #     df['ObjectID'] = parcel_id
+    #     return df
+    # else:
+    return X, Y, parcel_id
 
 
 def filter_df_with_distance_from_point(df, point, min_distance=0,
@@ -345,7 +608,7 @@ def get_historic_deals_for_city_code(main_path=nadlan_path, city_code=8700):
     streets = path_glob(main_path / str(city_code), 'Nadlan_deals_city_{}_*street*.csv'.format(city_code))
     # check for the h suffix and filter these files out (already done historic):
     streets = [x for x in streets if '_h' not in x.as_posix().split('/')[-1]]
-    print('Found {} streets to check.'.format(len(streets)))
+    print('Found {} streets to check in {}.'.format(len(streets), city_code))
     cnt = 1
     for street in streets:
         filename = street.as_posix().split('.')[0] + '_h.csv'
@@ -354,7 +617,12 @@ def get_historic_deals_for_city_code(main_path=nadlan_path, city_code=8700):
         #     cnt += 1
         #     continue
         df = pd.read_csv(street, na_values='None')
-        df = get_historic_nadlan_deals_from_a_street_df(df, unique=True)
+        try:
+            df = get_historic_nadlan_deals_from_a_street_df(df, unique=True)
+        except IndexError as e:
+            print('{} in file: {}, deleting'.format(e, street))
+            if 'no_streets' and 'nan' in street.as_posix():
+                street.unlink()
         if not df.empty:
             df.to_csv(filename, na_rep='None', index=False)
             print('File was rewritten ({} out of {}).'.format(cnt, len(streets)))
@@ -406,7 +674,7 @@ def get_historic_nadlan_deals_from_a_street_df(df, unique=True):
     try:
         dfh = pd.concat(dfs)
     except ValueError:
-        print('No hitoric deals found for {}, skipping...'.format(street))
+        print('No historic deals found for {}, skipping...'.format(street))
         return pd.DataFrame()
     dfh = dfh.reset_index()
     dfh = dfh.sort_index()
@@ -475,8 +743,8 @@ def concat_all_nadlan_deals_from_one_city_and_save(nadlan_path=work_david/'Nadla
     df['Building'] = df['FULLADRESS'].astype(str).str.extract('(\d+)')
     # df = df[~df['Building'].isna()]
     if savepath is not None:
-        yrmin = df.index.min().year
-        yrmax = df.index.max().year
+        yrmin = df['DEALDATETIME'].min().year
+        yrmax = df['DEALDATETIME'].max().year
         filename = 'Nadlan_deals_city_{}_all_streets_{}-{}.csv'.format(
             city_code, yrmin, yrmax)
         df.to_csv(savepath/filename, na_rep='None')
@@ -510,6 +778,7 @@ def get_all_nadlan_deals_from_one_city(path=work_david, city_code=5000,
             st_df.iloc[0]['street_name'], st_df.iloc[0]['city_name']))
     bad_streets_df = pd.DataFrame()
     all_streets = len(st_df)
+
     cnt = 1
     for i, row in st_df.iterrows():
         city_name = row['city_name']
