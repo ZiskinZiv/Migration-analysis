@@ -42,8 +42,8 @@ def remove_outlier(df_in, col_name, k=1.5):
     iqr = q3-q1  # Interquartile range
     fence_low = q1 - k * iqr
     fence_high = q3 + k * iqr
-    df_out = df_in.loc[(df_in[col_name] > fence_low) &
-                       (df_in[col_name] < fence_high)]
+    df_out = df_in.loc[(df_in[col_name] >= fence_low) &
+                       (df_in[col_name] <= fence_high)]
     return df_out
 
 
