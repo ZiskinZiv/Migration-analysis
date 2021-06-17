@@ -62,6 +62,20 @@ def produce_dfs_for_circles_around_point(point=intel_kiryat_gat_ITM,
     return df
 
 
+def remove_outlier_by_value_counts(df, col, thresh=5, keep_nans=True):
+    import pandas as pd
+    nans = df[df[col].isnull()]
+    vc = df[col].value_counts()
+    vc = vc[vc > thresh]
+    print('filtering df by allowing for minmum {} value counts in {}.'.format(thresh, col))
+    vals = [x for x in vc.index]
+    df = df[df[col].isin(vals)]
+    if keep_nans:
+        df = pd.concat([df, nans], axis=0)
+    df = df.reset_index(drop=True)
+    return df
+
+
 def tries_requests_example():
     from requests.exceptions import RequestException, ConnectionError
     tries = 100
@@ -509,6 +523,51 @@ def plot_deal_amount_room_number(df, room_min=2, room_max=5,
     return ax
 
 
+def concat_all_processed_nadlan_deals_and_save(path=nadlan_path/'Nadlan_full_cities',
+                                               savepath=work_david):
+    from Migration_main import path_glob
+    import pandas as pd
+    files = path_glob(path, 'Nadlan_deals_processed_city_*_all_streets_*.csv')
+    print('loading and concating {} cities.'.format(len(files)))
+    dtypes = {'FULLADRESS': 'object', 'Street': 'object','FLOORNO':'object',
+              'NEWPROJECTTEXT': 'object', 'PROJECTNAME': 'object'}
+    dfs = [pd.read_csv(file, na_values='None', parse_dates=['DEALDATETIME'],
+           dtype=dtypes) for file in files]
+    df = pd.concat(dfs, axis=0)
+    yrmin = df['DEALDATETIME'].min().year
+    yrmax = df['DEALDATETIME'].max().year
+    filename = 'Nadlan_deals_processed_{}-{}'.format(yrmin, yrmax)
+    fcsv = filename + '.csv'
+    fhdf = filename + '.hdf'
+    df.to_csv(savepath/fcsv, na_rep='None', index=False)
+    df.to_hdf(savepath/fhdf, complevel=9, mode='w', key='nadlan',
+              index=False)
+    print('{} was saved to {}.'.format(filename, path))
+    return df
+
+
+def process_nadlan_deals_from_all_cities(path=nadlan_path/'Nadlan_full_cities'):
+    from Migration_main import path_glob
+    import pandas as pd
+    files = path_glob(path, 'Nadlan_deals_city_*_all_streets_*.csv')
+    total = len(files)
+    for i, file in enumerate(files):
+        dtypes = {'FULLADRESS': 'string', 'Street': 'string','FLOORNO':'string'}
+        df = pd.read_csv(file, na_values='None', parse_dates=['DEALDATETIME'],
+                         dtype=dtypes)
+        city = df['City'].unique()[0]
+        city_code = df['city_code'].unique()[0]
+        print('processing {} ({}) ({}/{}).'.format(city, city_code, i+1, total))
+        print('Found {} deals.'.format(len(df)))
+        df = process_nadlan_deals_df_from_one_city(df)
+        filename = 'Nadlan_deals_processed_' + \
+            '_'.join(file.as_posix().split('/')[-1].split('_')[2:])
+        df.to_csv(path/filename, na_rep='None', index=False)
+        print('{} was saved to {}.'.format(filename, path))
+    print('Done!')
+    return
+
+
 def process_nadlan_deals_df_from_one_city(df):
     """first attempt of proccessing nadlan deals df:
         removal of outliers and calculation of various indices"""
@@ -518,6 +577,7 @@ def process_nadlan_deals_df_from_one_city(df):
     import geopandas as gpd
     import numpy as np
     df = df.reset_index(drop=True)
+    df = df[[x for x in df.columns if 'Unnamed' not in x]]
     # first, drop some cols:
     # df = df.drop(['NEWPROJECTTEXT', 'PROJECTNAME', 'TYPE',
     #               'POLYGON_ID', 'TREND_IS_NEGATIVE', 'TREND_FORMAT',
@@ -553,7 +613,8 @@ def process_nadlan_deals_df_from_one_city(df):
 
     # remove outliers in squared meters per asset:
     df = remove_outlier(df, 'DEALNATURE')
-    df = remove_outlier(df, 'ASSETROOMNUM')
+    if len(df) > 100:
+        df = remove_outlier_by_value_counts(df, 'ASSETROOMNUM', thresh=5)
     df = remove_outlier(df, 'DEALAMOUNT')
     # calculate squared meters per room:
     df['M2_per_ROOM'] = df['DEALNATURE'] / df['ASSETROOMNUM']
@@ -563,6 +624,7 @@ def process_nadlan_deals_df_from_one_city(df):
     df['Age'] = df['DEALDATETIME'].dt.year - df['BUILDINGYEAR']
     # try to guess ground floors apts.:
     df['Ground'] = df['FLOORNO'].str.contains('קרקע')
+    df = df.reset_index(drop=True)
     return df
 
 
