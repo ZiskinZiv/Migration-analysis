@@ -482,47 +482,6 @@ def sleep_between(start=2, end=4):
     return
 
 
-def keep_only_historic_changed_assets(df):
-    df = df.reset_index(drop=True)
-    grps = df.groupby('GUSH').groups
-    inds = []
-    for gush, ind in grps.items():
-        if len(ind) > 1:
-            inds.append([x for x in ind])
-    flat_list = [item for sublist in inds for item in sublist]
-    df_slice = df.loc[flat_list]
-    return df_slice
-
-
-def plot_deal_amount_room_number(df, room_min=2, room_max=5,
-                                 path=nadlan_path, yrmin='2000', yrmax='2020',
-                                 just_with_historic_change=False):
-    import seaborn as sns
-    import matplotlib.pyplot as plt
-    from cbs_procedures import read_bycode_city_data
-    import numpy as np
-    sns.set_theme(style='ticks', font_scale=1.5)
-    df = df.loc[(df['ASSETROOMNUM'] >= room_min) &
-                (df['ASSETROOMNUM'] <= room_max)]
-    df.set_index('DEALDATETIME', inplace=True)
-    df = df.loc[yrmin:yrmax]
-    city_code = df.loc[:, 'city_code'].unique()[0]
-    df = df.rename({'ASSETROOMNUM': 'Rooms', 'DEALAMOUNT': 'Price'}, axis=1)
-    df['Price'] /= 1000000
-    fig, ax = plt.subplots(figsize=(10, 8))
-    ax = sns.lineplot(data=df, x=df.index.year, y='Price', hue='Rooms',
-                      ci='sd', ax=ax, palette='Set1')
-    ax.grid(True)
-    ax.set_xlabel('')
-    ax.set_xticks(np.arange(int(yrmin), int(yrmax) + 1, 2))
-    ax.tick_params(axis='x', rotation=30)
-    ax.set_ylabel('Price [millions of NIS]')
-    bycode = read_bycode_city_data()
-    city_name = bycode[bycode['city_code']==city_code]['NameEn'].values[0]
-    fig.suptitle('Real-Estate prices in {}'.format(city_name))
-    return ax
-
-
 def concat_all_processed_nadlan_deals_and_save(path=nadlan_path/'Nadlan_full_cities',
                                                savepath=work_david):
     from Migration_main import path_glob
