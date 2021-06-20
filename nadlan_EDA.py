@@ -26,6 +26,15 @@ def load_nadlan_deals(path=work_david, csv=True):
     return df
 
 
+def is_outlier(s):
+    # add IQR
+    lower_limit = s.mean() - (s.std() * 3)
+    upper_limit = s.mean() + (s.std() * 3)
+    return ~s.between(lower_limit, upper_limit)
+
+# df1 = df[~df.groupby('year')['DEALAMOUNT'].apply(is_outlier)]
+
+
 def keep_only_historic_changed_assets(df):
     df = df.reset_index(drop=True)
     grps = df.groupby('GUSH').groups
