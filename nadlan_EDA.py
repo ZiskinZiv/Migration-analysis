@@ -46,6 +46,8 @@ def load_nadlan_deals(path=work_david, csv=True,
         df = pd.read_hdf(file)
     df['year'] = df['DEALDATETIME'].dt.year
     df['month'] = df['DEALDATETIME'].dt.month
+    df['quarter'] = df['DEALDATETIME'].dt.quarter
+    df['YQ'] = df['year'].astype(str) + 'Q' + df['quarter'].astype(str)
     if years is not None:
         print('Slicing to years {} to {}.'.format(*years))
         df = df[df['year'].isin(np.arange(years[0], years[1] + 1))]
@@ -256,7 +258,87 @@ def plot_room_number_deals(df, rooms_range=[2, 6]):
     return dff
 
 
-def bootstrap_df(df, n_rep=1000, n_sam=1000, grp='year', stat='mean',
+def compare_kiryat_gat_israel_dealamount(df_kg, df_isr):
+    # TODO: complete this
+    import pandas as pd
+    df_kg = df_kg.groupby(['rooms', 'YQ'])[
+        'DEALAMOUNT'].mean().to_frame().unstack().T.droplevel(0)
+    df_isr = df_isr.groupby(['rooms', 'YQ'])[
+        'DEALAMOUNT'].mean().to_frame().unstack().T.droplevel(0)
+    df_kg['YQ'] = df_kg.index
+    df_isr['YQ'] = df_isr.index
+    df_kg = df_kg.melt(id_vars='YQ', value_name='price_in_kg')
+    df_isr = df_isr.melt(id_vars='YQ', value_name='price_in_israel')
+    df = pd.concat([df_kg, df_isr], axis=1)
+    df['price_diff'] = df['price_in_kg'] - df['price_in_israel']
+    return df
+
+
+def plot_bootstrapped_dff_rooms(dff, time='year'):
+    import matplotlib.pyplot as plt
+    import pandas as pd
+    import seaborn as sns
+    sns.set_theme(style='ticks', font_scale=1.5)
+    fig, ax = plt.subplots(figsize=(15, 5))
+    dff['price'] = dff['DEALAMOUNT'] / 1e6
+    dff[time] = pd.to_datetime(dff[time])
+    sns.lineplot(data=dff, x=time, y='price', ci='sd', hue='rooms',
+                 ax=ax, style='rooms')
+    ax.grid(True)
+    ax.set_xlabel('')
+
+    # ax.set_xticks(np.arange(1998, 2021, 2))
+    ax.set_ylabel('Apartment price [millions NIS]')
+    fig.suptitle('Mean apartment prices in Israel')
+    fig.tight_layout()
+    return fig
+
+
+def prepare_bootstrapped_dfs_by_year_and_apts(df, nr=1000, frac=0.05,
+                                              city_code=None, grp='year'):
+    import pandas as pd
+    df = df[df['DEALNATUREDESCRIPTION'].isin(apts)]
+    if city_code is not None:
+        df = df[df['city_code'] == city_code]
+        print('{} city selected ({})'.format(
+            df['City'].unique()[0], city_code))
+    groups = [[2, 3], [3, 4], [4, 5]]
+    grp_dfs = []
+    for apt_group in groups:
+        print('{} rooms selected.'.format(
+            ','.join([str(x) for x in apt_group])))
+        df1 = df[df['ASSETROOMNUM'].isin(apt_group)]
+        dff = bootstrap_df_by_year(
+            df1, col='DEALAMOUNT', n_replicas=nr, frac_deals=frac,
+            grp=grp)
+        dff['rooms'] = '-'.join([str(x) for x in apt_group])
+        grp_dfs.append(dff)
+    return pd.concat(grp_dfs, axis=0)
+
+
+def bootstrap_df_by_year(df, grp='year', frac_deals=0.1, col='NIS_per_M2',
+                         n_replicas=1000, plot=False):
+    import pandas as pd
+    import seaborn as sns
+    count = df.groupby(grp)[col].count()
+    dffs = []
+    for year in count.index:
+        samples = count.loc[year] * frac_deals
+        print('bootstrapping year {} with {} samples.'.format(year, samples))
+        df1 = df[df[grp] == year][col].dropna()
+        # print(len(df1))
+        # dff = bootstrap_df(df1, n_rep=n_replicas,
+                           # frac=frac_deals, n_sam=None, col=col, grp=None)
+        dff = pd.Series([df1.sample(n=None, frac=frac_deals, replace=True, random_state=None).mean() for i in range(n_replicas)])
+        dff = dff.to_frame(year).reset_index(drop=True)
+        dffs.append(dff)
+    stats = pd.concat(dffs, axis=1).melt(var_name=grp, value_name=col)
+    if plot:
+        sns.lineplot(data=stats, x=grp, y=col, ci='sd')
+    return stats
+
+
+def bootstrap_df(df, n_rep=1000, n_sam=1000, frac=None, grp='year', stat='mean',
                  col='NIS_per_M2'):
     import pandas as pd
     print('bootstapping the {} from {} replicas of {} samples from {} in df.'.format(
@@ -264,8 +346,9 @@ def bootstrap_df(df, n_rep=1000, n_sam=1000, grp='year', stat='mean',
     if grp is not None:
         print('{} groupby chosen.'.format(grp))
         stats = pd.DataFrame([df.groupby(grp).sample(
-            n=n_sam, replace=True, random_state=None).groupby(grp)[col].agg(stat) for i in range(n_rep)])
+            n=n_sam, frac=frac, replace=True, random_state=None).groupby(grp)[col].agg(stat) for i in range(n_rep)])
+        stats = stats.melt(value_name=col)
     else:
-        stats = pd.DataFrame([df.sample(n=n_sam, replace=True, random_state=None)[
-                             col].agg(stat) for i in range(n_rep)])
+        stats = pd.Series([df[col].sample(n=n_sam, frac=frac, replace=True, random_state=None).agg(stat) for i in range(n_rep)])
+
     return stats
