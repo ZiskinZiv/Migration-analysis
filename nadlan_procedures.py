@@ -588,7 +588,7 @@ def process_nadlan_deals_df_from_one_city(df):
 
 
 def concat_all_nadlan_deals_from_all_cities_and_save(nadlan_path=work_david/'Nadlan_deals',
-                                                     savepath=None,
+                                                     savepath=None, drop_dup=True,
                                                      delete_files=False):
     """concat all nadlan deals for all the cities in nadlan_path"""
     from Migration_main import path_glob
@@ -603,7 +603,8 @@ def concat_all_nadlan_deals_from_all_cities_and_save(nadlan_path=work_david/'Nad
         concat_all_nadlan_deals_from_one_city_and_save(nadlan_path=nadlan_path,
                                                        city_code=int(city_code),
                                                        savepath=savepath,
-                                                       delete_files=delete_files)
+                                                       delete_files=delete_files,
+                                                       drop_dup=drop_dup)
     return
 
 
@@ -723,7 +724,8 @@ def get_historic_nadlan_deals_from_a_street_df(df, unique=True):
 def concat_all_nadlan_deals_from_one_city_and_save(nadlan_path=work_david/'Nadlan_deals',
                                                    city_code=8700,
                                                    savepath=None,
-                                                   delete_files=False):
+                                                   delete_files=False,
+                                                   drop_dup=True):
     """concat all nadlan deals for all streets in a specific city"""
     import pandas as pd
     import numpy as np
@@ -759,7 +761,8 @@ def concat_all_nadlan_deals_from_one_city_and_save(nadlan_path=work_david/'Nadla
     df['City'] = df['City'].str.strip()
     df = df[df['City'] == good_city]
     # take care of street_code columns all but duplicates bc of neighhood code/street code:
-    df = df.drop_duplicates(subset=df.columns.difference(['street_code', 'Street']))
+    if drop_dup:
+        df = df.drop_duplicates(subset=df.columns.difference(['street_code', 'Street']))
     # lasty, extract Building number from FULLADRESS and is NaN remove record:
     df['Building'] = df['FULLADRESS'].astype(str).str.extract('(\d+)')
     # df = df[~df['Building'].isna()]
