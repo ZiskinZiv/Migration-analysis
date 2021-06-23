@@ -10,8 +10,28 @@ nadlan_path = work_david / 'Nadlan_deals'
 apts = ['דירה', 'דירה בבית קומות']
 
 
+def create_higher_group_category(df, existing_col='SEI_cluster', n_groups=2,
+                                 new_col='SEI2_cluster', names=None):
+    import pandas as pd
+    lower_group = sorted(df[existing_col].dropna().unique())
+    new_group = [lower_group[i:i+n_groups+1] for i in range(0, len(lower_group), n_groups+1)]
+    new_dict = {}
+    if names is not None:
+        assert len(names) == len(new_group)
+    for i, item in enumerate(new_group):
+        if names is not None:
+            new_dict[names[i]] = new_group[i]
+        else:
+            new_dict[i+1] = new_group[i]
+    m = pd.Series(new_dict).explode().sort_values()
+    d = {x: y for (x, y) in zip(m.values, m.index)}
+    df[new_col] = df[existing_col].map(d)
+    return df
+
+
 def load_nadlan_deals(path=work_david, csv=True,
-                      years=[1998, 2020], filter_dealamount=True):
+                      years=[1998, 2020], filter_dealamount=True,
+                      fix_new_status=True, add_SEI2_cluster=True):
     import pandas as pd
     import numpy as np
     from Migration_main import path_glob
@@ -26,12 +46,25 @@ def load_nadlan_deals(path=work_david, csv=True,
         df = pd.read_hdf(file)
     df['year'] = df['DEALDATETIME'].dt.year
     df['month'] = df['DEALDATETIME'].dt.month
-    print('Slicing to years {} to {}.'.format(*years))
-    df = df[df['year'].isin(np.arange(years[0], years[1] + 1))]
+    if years is not None:
+        print('Slicing to years {} to {}.'.format(*years))
+        df = df[df['year'].isin(np.arange(years[0], years[1] + 1))]
     if filter_dealamount:
         print('Filtering DEALAMOUNT with IQR of  {}.'.format(1.5))
         df = df[~df.groupby('year')['DEALAMOUNT'].apply(
             is_outlier, method='iqr', k=1.5)]
+    if fix_new_status:
+        inds = df.loc[(df['Age'] < 0) & (df['Age'] > -5)].index
+        df.loc[inds, 'New'] = True
+    if add_SEI2_cluster:
+        SEI_cluster = [x+1 for x in range(10)]
+        new = [SEI_cluster[i:i+2] for i in range(0, len(SEI_cluster), 2)]
+        SEI2 = {}
+        for i, item in enumerate(new):
+            SEI2[i+1] = new[i]
+        m = pd.Series(SEI2).explode().sort_values()
+        d = {x: y for (x, y) in zip(m.values, m.index)}
+        df['SEI2_cluster'] = df['SEI_cluster'].map(d)
     return df
 
 
@@ -84,7 +117,9 @@ def convert_da_to_long_form_df(da, var_name=None, value_name=None):
     return df
 
 
-def calculate_recurrent_times_and_pct_change(df):
+def calculate_recurrent_times_and_pct_change(df, plot=True):
+    import seaborn as sns
+    sns.set_theme(style='ticks', font_scale=1.5)
     df = df.sort_values('DEALDATETIME')
     dff = df.groupby('GUSH')['DEALAMOUNT'].count()
     dff2 = df[df['GUSH'].isin(dff[dff > 1].index)]
@@ -92,10 +127,28 @@ def calculate_recurrent_times_and_pct_change(df):
     deals_pct_change = dff2.groupby('GUSH')['DEALAMOUNT'].pct_change()
     df['years_between_deals'] = seconds_between_deals / 60 / 60 / 24 / 365.25
     df['mean_years_between_deals'] = df.groupby('GUSH')['years_between_deals'].transform('mean')
-    df['deals_pct_change'] = deals_pct_change
+    df['deals_pct_change'] = deals_pct_change * 100
     df['mean_deals_pct_change'] = df.groupby('GUSH')['deals_pct_change'].transform('mean')
-    return df
-
+    # drop duplicated dt's:
+    deals_inds_to_drop = deals_pct_change[deals_pct_change == 0].index
+    seconds_inds_to_drop = seconds_between_deals[seconds_between_deals == 0].index
+    inds_to_drop = deals_inds_to_drop.union(seconds_inds_to_drop)
+    df = df.drop(inds_to_drop, axis=0)
+    print('Dropped {} deals'.format(len(inds_to_drop)))
+    if plot:
+        g = sns.JointGrid(data=df, x='years_between_deals',
+                          y='deals_pct_change', height=7.5)
+        g.plot_joint(sns.kdeplot, fill=True, cut=1, gridsize=100)
+        g.plot_marginals(sns.histplot)
+        g.ax_joint.grid(True)
+        g.ax_joint.set_xlim(-1, 21)
+        g.ax_joint.set_ylim(-100, 260)
+        g.ax_joint.set_ylabel('Change in recurrent deals [%]')
+        g.ax_joint.set_xlabel('Years between recurrent deals')
+        g.fig.tight_layout()
+        return g
+    else:
+        return df
 
 def plot_recurrent_deals(df, max_number_of_sells=6, rooms=[2, 3, 4, 5]):
     import numpy as np
@@ -139,7 +192,7 @@ def plot_recurrent_deals(df, max_number_of_sells=6, rooms=[2, 3, 4, 5]):
         ax.set_xlabel('Number of times an apartment is sold')
     return f
 
-def plot_deal_amount_room_number(df, room_min=2, room_max=5,
+def plot_deal_amount_room_number(df, rooms=[2, 3, 4, 5],
                                  path=nadlan_path, yrmin='2000', yrmax='2020',
                                  just_with_historic_change=False):
     import seaborn as sns
@@ -147,8 +200,9 @@ def plot_deal_amount_room_number(df, room_min=2, room_max=5,
     from cbs_procedures import read_bycode_city_data
     import numpy as np
     sns.set_theme(style='ticks', font_scale=1.5)
-    df = df.loc[(df['ASSETROOMNUM'] >= room_min) &
-                (df['ASSETROOMNUM'] <= room_max)]
+    # df = df.loc[(df['ASSETROOMNUM'] >= room_min) &
+    #             (df['ASSETROOMNUM'] <= room_max)]
+    df = df[df['ASSETROOMNUM'].isin(rooms)]
     df.set_index('DEALDATETIME', inplace=True)
     df = df.loc[yrmin:yrmax]
     city_code = df.loc[:, 'city_code'].unique()[0]
@@ -166,3 +220,52 @@ def plot_deal_amount_room_number(df, room_min=2, room_max=5,
     city_name = bycode[bycode['city_code']==city_code]['NameEn'].values[0]
     fig.suptitle('Real-Estate prices in {}'.format(city_name))
     return ax
+
+
+def plot_groupby_m2_price_time_series(df, grps=['City', 'Neighborhood'],
+                                      col='NIS_per_M2'):
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+    sns.set_theme(style='ticks', font_scale=1.5)
+    groups = grps.copy()
+    groups.append('year')
+    dfn = df.groupby(groups, as_index=False)[col].mean().groupby('year').mean()
+    std = df.groupby(groups, as_index=False)[col].mean().groupby('year').std()[col].values
+    dfn['plus_std'] = dfn[col] + std
+    dfn['minus_std'] = dfn[col] - std
+    fig, ax = plt.subplots(figsize=(14, 5))
+    dfn[col].plot(ax=ax)
+    ax.fill_between(dfn.index, dfn['minus_std'], dfn['plus_std'], alpha=0.3)
+    ax.set_ylabel(r'NIS per M$^2$')
+    fig.tight_layout()
+    ax.grid(True)
+    return fig
+
+
+def plot_room_number_deals(df, rooms_range=[2, 6]):
+    import seaborn as sns
+    sns.set_theme(style='ticks', font_scale=1.5)
+    if rooms_range is not None:
+        df = df.loc[(df['ASSETROOMNUM'] >= rooms_range[0]) &
+                    (df['ASSETROOMNUM'] <= rooms_range[1])]
+    dff = df.groupby(['ASSETROOMNUM', 'year'])['DEALAMOUNT'].count()
+    da = dff.to_xarray()
+    dff = convert_da_to_long_form_df(da, value_name='Deals')
+    ax = sns.barplot(data=dff,x='year', y='Deals', hue='ASSETROOMNUM', palette='Set1')
+    ax.grid(True)
+    return dff
+
+
+def bootstrap_df(df, n_rep=1000, n_sam=1000, grp='year', stat='mean',
+                 col='NIS_per_M2'):
+    import pandas as pd
+    print('bootstapping the {} from {} replicas of {} samples from {} in df.'.format(
+        stat, n_rep, n_sam, col))
+    if grp is not None:
+        print('{} groupby chosen.'.format(grp))
+        stats = pd.DataFrame([df.groupby(grp).sample(
+            n=n_sam, replace=True, random_state=None).groupby(grp)[col].agg(stat) for i in range(n_rep)])
+    else:
+        stats = pd.DataFrame([df.sample(n=n_sam, replace=True, random_state=None)[
+                             col].agg(stat) for i in range(n_rep)])
+    return stats
