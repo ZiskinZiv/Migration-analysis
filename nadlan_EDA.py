@@ -30,7 +30,7 @@ def create_higher_group_category(df, existing_col='SEI_cluster', n_groups=2,
 
 
 def load_nadlan_deals(path=work_david, csv=True,
-                      years=[1998, 2020], filter_dealamount=True,
+                      times=['1998Q1', '2021Q1'], filter_dealamount=True,
                       fix_new_status=True, add_SEI2_cluster=True):
     import pandas as pd
     import numpy as np
@@ -48,9 +48,12 @@ def load_nadlan_deals(path=work_david, csv=True,
     df['month'] = df['DEALDATETIME'].dt.month
     df['quarter'] = df['DEALDATETIME'].dt.quarter
     df['YQ'] = df['year'].astype(str) + 'Q' + df['quarter'].astype(str)
-    if years is not None:
-        print('Slicing to years {} to {}.'.format(*years))
-        df = df[df['year'].isin(np.arange(years[0], years[1] + 1))]
+    if times is not None:
+        print('Slicing to times {} to {}.'.format(*times))
+        # df = df[df['year'].isin(np.arange(years[0], years[1] + 1))]
+        df = df.set_index('DEALDATETIME')
+        df = df.loc[times[0]:times[1]]
+        df = df.reset_index()
     if filter_dealamount:
         print('Filtering DEALAMOUNT with IQR of  {}.'.format(1.5))
         df = df[~df.groupby('year')['DEALAMOUNT'].apply(
@@ -194,6 +197,7 @@ def plot_recurrent_deals(df, max_number_of_sells=6, rooms=[2, 3, 4, 5]):
         ax.set_xlabel('Number of times an apartment is sold')
     return f
 
+
 def plot_deal_amount_room_number(df, rooms=[2, 3, 4, 5],
                                  path=nadlan_path, yrmin='2000', yrmax='2020',
                                  just_with_historic_change=False):
@@ -261,16 +265,34 @@ def plot_room_number_deals(df, rooms_range=[2, 6]):
 def compare_kiryat_gat_israel_dealamount(df_kg, df_isr):
     # TODO: complete this
     import pandas as pd
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+    sns.set_theme(style='ticks', font_scale=1.5)
     df_kg = df_kg.groupby(['rooms', 'YQ'])[
         'DEALAMOUNT'].mean().to_frame().unstack().T.droplevel(0)
     df_isr = df_isr.groupby(['rooms', 'YQ'])[
         'DEALAMOUNT'].mean().to_frame().unstack().T.droplevel(0)
-    df_kg['YQ'] = df_kg.index
-    df_isr['YQ'] = df_isr.index
-    df_kg = df_kg.melt(id_vars='YQ', value_name='price_in_kg')
-    df_isr = df_isr.melt(id_vars='YQ', value_name='price_in_israel')
-    df = pd.concat([df_kg, df_isr], axis=1)
-    df['price_diff'] = df['price_in_kg'] - df['price_in_israel']
+    # df_kg['YQ'] = df_kg.index
+    # df_isr['YQ'] = df_isr.index
+    # df_kg = df_kg.melt(id_vars='YQ', value_name='price_in_kg')
+    # df_isr = df_isr.melt(id_vars='YQ', value_name='price_in_israel')
+    # df = pd.concat([df_kg, df_isr], axis=1)
+    df = df_kg - df_isr
+    # df['price_diff'] = df['price_in_kg'] - df['price_in_israel']
+    fig, ax = plt.subplots(figsize=(15.5, 6))
+    df1 = df / 1e6
+    df1.index = pd.to_datetime(df1.index)
+    df1.plot(ax=ax, cmap=sns.color_palette("tab10", as_cmap=True))
+    ax.set_ylabel('Price difference [million NIS]')
+    df2 = df1.rolling(4, center=True).mean()
+    df2.columns = ['{} rolling mean'.format(x) for x in df2.columns]
+    df2.plot(ax=ax, cmap=sns.color_palette("tab10", as_cmap=True), ls='--')
+    ax.axvline(pd.to_datetime('2008-07-01'), color='g')
+    ax.axvline(pd.to_datetime('2006-01-01'), color='r')
+    ax.grid(True)
+    ax.set_xlabel('')
+    fig.suptitle('Kiryat Gat - Israel mean apartment prices')
+    fig.tight_layout()
     return df
 
 
@@ -296,6 +318,7 @@ def plot_bootstrapped_dff_rooms(dff, time='year'):
 
 def prepare_bootstrapped_dfs_by_year_and_apts(df, nr=1000, frac=0.05,
                                               city_code=None, grp='year'):
+    # for all Israel i did nr=5000, frac=0.35
     import pandas as pd
     df = df[df['DEALNATUREDESCRIPTION'].isin(apts)]
     if city_code is not None:
@@ -338,17 +361,17 @@ def bootstrap_df_by_year(df, grp='year', frac_deals=0.1, col='NIS_per_M2',
     return stats
 
 
-def bootstrap_df(df, n_rep=1000, n_sam=1000, frac=None, grp='year', stat='mean',
-                 col='NIS_per_M2'):
-    import pandas as pd
-    print('bootstapping the {} from {} replicas of {} samples from {} in df.'.format(
-        stat, n_rep, n_sam, col))
-    if grp is not None:
-        print('{} groupby chosen.'.format(grp))
-        stats = pd.DataFrame([df.groupby(grp).sample(
-            n=n_sam, frac=frac, replace=True, random_state=None).groupby(grp)[col].agg(stat) for i in range(n_rep)])
-        stats = stats.melt(value_name=col)
-    else:
-        stats = pd.Series([df[col].sample(n=n_sam, frac=frac, replace=True, random_state=None).agg(stat) for i in range(n_rep)])
+# def bootstrap_df(df, n_rep=1000, n_sam=1000, frac=None, grp='year', stat='mean',
+#                  col='NIS_per_M2'):
+#     import pandas as pd
+#     print('bootstapping the {} from {} replicas of {} samples from {} in df.'.format(
+#         stat, n_rep, n_sam, col))
+#     if grp is not None:
+#         print('{} groupby chosen.'.format(grp))
+#         stats = pd.DataFrame([df.groupby(grp).sample(
+#             n=n_sam, frac=frac, replace=True, random_state=None).groupby(grp)[col].agg(stat) for i in range(n_rep)])
+#         stats = stats.melt(value_name=col)
+#     else:
+#         stats = pd.Series([df[col].sample(n=n_sam, frac=frac, replace=True, random_state=None).agg(stat) for i in range(n_rep)])
 
-    return stats
+#     return stats
