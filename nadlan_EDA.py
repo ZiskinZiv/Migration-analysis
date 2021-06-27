@@ -101,6 +101,21 @@ def keep_only_historic_changed_assets(df):
     return df_slice
 
 
+def create_neighborhood_polygons(gdf):
+    import numpy as np
+    gdf = gdf.reset_index()
+    neis = gdf['Neighborhood'].unique()
+    gdf['neighborhood_shape'] = gdf.geometry
+    # Must be a geodataframe:
+    for nei in neis:
+        gdf1 = gdf[gdf['Neighborhood']==nei]
+        inds = gdf1.index
+        polygon = gdf1.geometry.unary_union.convex_hull
+        # gdf.loc[inds, 'neighborhood_shape'] = [polygon for x in range(len(inds))]
+        gdf.loc[inds, 'neighborhood_shape'] = polygon
+    return gdf
+
+
 def convert_da_to_long_form_df(da, var_name=None, value_name=None):
     """ convert xarray dataarray to long form pandas df
     to use with seaborn"""
@@ -277,10 +292,10 @@ def compare_kiryat_gat_israel_dealamount(df_kg, df_isr):
     # df_kg = df_kg.melt(id_vars='YQ', value_name='price_in_kg')
     # df_isr = df_isr.melt(id_vars='YQ', value_name='price_in_israel')
     # df = pd.concat([df_kg, df_isr], axis=1)
-    df = df_kg - df_isr
+    df = df_kg / df_isr
     # df['price_diff'] = df['price_in_kg'] - df['price_in_israel']
     fig, ax = plt.subplots(figsize=(15.5, 6))
-    df1 = df / 1e6
+    df1 = df #/ 1e6
     df1.index = pd.to_datetime(df1.index)
     df1.plot(ax=ax, cmap=sns.color_palette("tab10", as_cmap=True))
     ax.set_ylabel('Price difference [million NIS]')
