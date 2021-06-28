@@ -30,7 +30,7 @@ def create_higher_group_category(df, existing_col='SEI_cluster', n_groups=2,
 
 
 def load_nadlan_deals(path=work_david, csv=True,
-                      times=['1998Q1', '2021Q1'], filter_dealamount=True,
+                      times=['1998Q1', '2021Q1'], dealamount_iqr=2,
                       fix_new_status=True, add_SEI2_cluster=True):
     import pandas as pd
     import numpy as np
@@ -54,10 +54,10 @@ def load_nadlan_deals(path=work_david, csv=True,
         df = df.set_index('DEALDATETIME')
         df = df.loc[times[0]:times[1]]
         df = df.reset_index()
-    if filter_dealamount:
-        print('Filtering DEALAMOUNT with IQR of  {}.'.format(1.5))
+    if dealamount_iqr is not None:
+        print('Filtering DEALAMOUNT with IQR of  {}.'.format(dealamount_iqr))
         df = df[~df.groupby('year')['DEALAMOUNT'].apply(
-            is_outlier, method='iqr', k=2)]
+            is_outlier, method='iqr', k=dealamount_iqr)]
     if fix_new_status:
         inds = df.loc[(df['Age'] < 0) & (df['Age'] > -5)].index
         df.loc[inds, 'New'] = True
