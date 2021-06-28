@@ -102,6 +102,94 @@ def read_periphery_index(path=work_david):
     return dff
 
 
+def read_building_starts_ends(path=work_david, filename='BuildingIL_1995-2000 (Shlomi).xlsx'):
+    import pandas as pd
+    df = pd.read_excel(path/filename, sheet_name='Raw')
+    return df
+
+
+def calculate_building_rates(bdf, phase='End', rooms='Total', fillna=True):
+    import pandas as pd
+    df = bdf[bdf['Phase'] == phase]
+    df = df.groupby(['ID', 'Year'])[rooms].sum().unstack().T
+    da = df.diff().T.to_xarray().to_array('time')
+    da.name = 'BR'
+    da.attrs['long_name'] = 'Building rate'
+    da.attrs['units'] = 'BPY'
+    da.attrs['rooms'] = rooms
+    da.attrs['phase'] = phase
+    da['time'] = pd.to_datetime(da['time'], format='%Y')
+    if fillna:
+        da = da.resample(time='MS').asfreq()
+        da = da.interpolate_na('time', method='linear')
+        da = da.rolling(time=12, center=True).mean()
+    df = da.to_dataset('ID').to_dataframe()
+    return df
+
+
+def read_boi_mortgage(path=work_david, filename='pribmash.xls',
+                      rolling=6):
+    import pandas as pd
+    df = pd.read_excel(path/filename, skiprows=5, sheet_name='RESULT_OLD')
+    df.columns = ['average', '>20', '17-20', '15-17', '12-15', '5-12', '<=5', 'from', 'due', 'drop1', 'drop2']
+    data_cols = ['average', '>20', '17-20', '15-17', '12-15', '5-12', '<=5']
+    df = df[[x for x in df.columns if 'drop' not in x]]
+    df_old = df.dropna()
+    df = pd.read_excel(path/filename, skiprows=5, sheet_name='RESULT')
+    df.columns = ['average', '>20', '17-20', '15-17', '12-15', '5-12', '<=5', 'from', 'due', 'drop1', 'drop2']
+    df = df[[x for x in df.columns if 'drop' not in x]]
+    df = pd.concat([df, df_old], axis=0)
+    df = df.set_index('from')
+    df = df.sort_index()
+    df['average'] = df['average'].astype(float)
+    if rolling is not None:
+        df = df.resample('MS').mean()
+        df[data_cols] = df[data_cols].rolling(rolling, center=True).mean()
+    return df
+
+
+def read_boi_interest(path=work_david, filename='bointcrh.xls'):
+    import pandas as pd
+    df = pd.read_excel(path/filename, header=2, sheet_name='גיליון1')
+    df.columns = ['month', 'nominal_simple', 'effective', 'eff_monitar_loans',
+                  'eff_monitar_deposits', 'eff_inter_bank_transfer', 'to_drop1', 'to_drop2']
+    data_cols = ['nominal_simple', 'effective', 'eff_monitar_loans',
+                 'eff_monitar_deposits', 'eff_inter_bank_transfer']
+    # drop some cols:
+    df = df[[x for x in df.columns if 'to_drop' not in x]]
+    # take care of datetimes:
+    df['mnth_type'] = [pd.to_datetime(x, errors='coerce') for x in df['month']]
+    df1 = df[~df['mnth_type'].isnull()]
+    ind = df1.index[0]
+    df1.set_index(pd.to_datetime(df1['month']))
+    df1 = df1.set_index(pd.to_datetime(df1['month']))
+    df2 = df.iloc[0:ind]
+    df2['date1'] = [x[0] for x in df2['month'].str.split('-')]
+    df2['date2'] = [x[-1] for x in df2['month'].str.split('-')]
+
+    df2['date1'] = pd.to_datetime(df2['date1'])
+    df2['date2'] = pd.to_datetime(df2['date2'])
+    df2_data = []
+    for i, row in df2.iterrows():
+        dt1 = pd.to_datetime(row['date1'], format='%Y-%m')
+        dt2 = pd.to_datetime(row['date2'], format='%Y-%m')
+        dtr = pd.date_range(dt1, dt2, freq='M')
+        dfr = pd.DataFrame([row[data_cols]]*len(dtr), index=dtr)
+        df2_data.append(dfr)
+    dff = pd.concat(df2_data, axis=0)
+    df = pd.concat([df1[data_cols], dff], axis=0)
+    df = df.sort_index()
+    df = df[~df.index.duplicated(keep='first')]
+    return df
+
+
+def run_mortgage_interest_building_lag_analysis(bdf, mdf, irate='average'):
+    df = mdf[irate].to_frame()
+    df[5000] = bdf[5000]
+
+    return df
+
+
 def read_cbs_main_indicies(start_date='1997-01', end_date=None,
                            savepath=None):
     import pandas as pd
