@@ -120,9 +120,9 @@ def calculate_building_rates(bdf, phase='End', rooms='Total', fillna=True):
     da.attrs['phase'] = phase
     da['time'] = pd.to_datetime(da['time'], format='%Y')
     if fillna:
-        da = da.resample(time='MS').asfreq()
+        da = da.resample(time='MS').asfreq().sel(time=slice('1996', '2020'))
         da = da.interpolate_na('time', method='linear')
-        da = da.rolling(time=12, center=True).mean()
+        da = da.rolling(time=6, center=True).mean()
     df = da.to_dataset('ID').to_dataframe()
     return df
 
