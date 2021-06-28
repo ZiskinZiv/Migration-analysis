@@ -108,7 +108,7 @@ def read_building_starts_ends(path=work_david, filename='BuildingIL_1995-2000 (S
     return df
 
 
-def calculate_building_rates(bdf, phase='End', rooms='Total', fillna=True):
+def calculate_building_rates(bdf, phase='Begin', rooms='Total', fillna=True):
     import pandas as pd
     df = bdf[bdf['Phase'] == phase]
     df = df.groupby(['ID', 'Year'])[rooms].sum().unstack().T
@@ -183,10 +183,38 @@ def read_boi_interest(path=work_david, filename='bointcrh.xls'):
     return df
 
 
-def run_mortgage_interest_building_lag_analysis(bdf, mdf, irate='average'):
+def run_mortgage_interest_building_lag_analysis(bdf, mdf, irate='average', months=24,
+                                                cities=None):
+    import pandas as pd
     df = mdf[irate].to_frame()
-    df[5000] = bdf[5000]
-
+    # shift mortgage interest rates earlier in time:
+    for i in range(months):
+        df['{}_{}'.format(irate, i+1)] = df[irate].shift(-i-1)
+    # add city and find best corrlation:
+    city_corr = {}
+    city_lag = {}
+    if cities is None:
+        cities = bdf.columns
+    for city in cities:
+        df[city] = bdf[city]
+        corr=df.corr()[city].abs()
+        if corr.isnull().sum() > 1:
+            print('No correlation for {}.'.format(city))
+            df = df.drop(city, axis=1)
+            continue
+        lag_str=corr.drop(city,axis=0).idxmax()
+        corr_max = corr.drop(city,axis=0).max()
+        try:
+            print(city, lag_str)
+            lag = lag_str.split('_')[-1]
+            lag = int(lag)
+        except ValueError:
+            lag = 0
+        city_corr[city] = corr_max
+        city_lag[city] = lag
+        df = df.drop(city, axis=1)
+    df=pd.concat([pd.Series(city_lag), pd.Series(city_corr)], axis=1)
+    df.columns = ['month_lag', 'correlation']
     return df
 
 
