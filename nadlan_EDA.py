@@ -57,7 +57,7 @@ def load_nadlan_deals(path=work_david, csv=True,
     if filter_dealamount:
         print('Filtering DEALAMOUNT with IQR of  {}.'.format(1.5))
         df = df[~df.groupby('year')['DEALAMOUNT'].apply(
-            is_outlier, method='iqr', k=1.5)]
+            is_outlier, method='iqr', k=2)]
     if fix_new_status:
         inds = df.loc[(df['Age'] < 0) & (df['Age'] > -5)].index
         df.loc[inds, 'New'] = True
@@ -390,3 +390,15 @@ def bootstrap_df_by_year(df, grp='year', frac_deals=0.1, col='NIS_per_M2',
 #         stats = pd.Series([df[col].sample(n=n_sam, frac=frac, replace=True, random_state=None).agg(stat) for i in range(n_rep)])
 
 #     return stats
+
+
+def run_lag_analysis_boi_interest_nadlan(ndf, idf, i_col='effective', months=48):
+    ndf = ndf.set_index('DEALDATETIME')
+    ndf_mean = ndf['DEALAMOUNT'].resample('M').mean()
+    idf = idf[i_col].to_frame()
+    idf = idf.rolling(6, center=True).mean()
+    idf['apt_prices'] = ndf_mean.rolling(6, center=True).mean()
+    for i in range(months):
+        idf['{}_{}'.format(i_col, i+1)] = idf[i_col].shift(-i-1)
+    return idf
+
