@@ -15,6 +15,7 @@ then process each df_city
 # and get the precise coords and nieghborhood
 from MA_paths import work_david
 nadlan_path = work_david / 'Nadlan_deals'
+apts = ['דירה', 'דירה בבית קומות']
 
 intel_kiryat_gat = [31.599645, 34.785265]
 
@@ -60,6 +61,22 @@ def produce_dfs_for_circles_around_point(point=intel_kiryat_gat_ITM,
         df.to_csv(savepath/filename, na_rep='None', index=False)
         print('{} was saved to {}.'.format(filename, savepath))
     return df
+
+def produce_n_largest_cities_nadlan_time_series(df, col='NIS_per_M2', n=10):
+    import pandas as pd
+    df= df[df['DEALNATUREDESCRIPTION'].isin(apts)]
+    cities=get_all_city_codes_from_largest_to_smallest()
+    inds = cities.iloc[0:n].index
+    dfs = []
+    for ind in inds:
+        print('producing time seires for {}'.format(ind))
+        city_df = df[df['city_code']==ind]
+        city_mean = city_df.set_index('DEALDATETIME').resample('MS')[col].mean().rolling(12, center=True).mean()
+        city_mean = city_mean.to_frame('{}_{}'.format(col, ind))
+        city_mean.index.name = ''
+        dfs.append(city_mean)
+    df_cities = pd.concat(dfs, axis=1)
+    return df_cities
 
 
 def remove_outlier_by_value_counts(df, col, thresh=5, keep_nans=True):
