@@ -32,11 +32,12 @@ def create_higher_group_category(df, existing_col='SEI_cluster', n_groups=2,
 def load_nadlan_deals(path=work_david, csv=True,
                       times=['1998Q1', '2021Q1'], dealamount_iqr=2,
                       fix_new_status=True, add_SEI2_cluster=True,
-                      add_peripheri_data=True):
+                      add_peripheri_data=True, add_bycode_data=True):
     import pandas as pd
     import numpy as np
     from Migration_main import path_glob
     from cbs_procedures import read_periphery_index
+    from cbs_procedures import read_bycode_city_data
     if csv:
         file = path_glob(path, 'Nadlan_deals_processed_*.csv')
         dtypes = {'FULLADRESS': 'object', 'Street': 'object', 'FLOORNO': 'object',
@@ -81,6 +82,14 @@ def load_nadlan_deals(path=work_david, csv=True,
         pdf1 = pd.concat(series, axis=1)
         pdf1.columns = cols
         df = pd.concat([df, pdf1], axis=1)
+    if add_bycode_data:
+        bdf = read_bycode_city_data()
+        cols = ['district', 'district_EN', 'region', 'natural_area']
+        dicts = [bdf[x].to_dict() for x in cols]
+        series = [df['city_code'].map(x) for x in dicts]
+        bdf1 = pd.concat(series, axis=1)
+        bdf1.columns = cols
+        df = pd.concat([df, bdf1], axis=1)
     return df
 
 
@@ -288,7 +297,7 @@ def plot_room_number_deals(df, rooms_range=[2, 6]):
     return dff
 
 
-def plot_price_per_m2_SEI2_cluster(df, n_boot=100):
+def plot_price_per_m2(df, n_boot=100, hue='SEI2_cluster', y='NIS_per_M2'):
     import pandas as pd
     import seaborn as sns
     import matplotlib.pyplot as plt
@@ -296,7 +305,7 @@ def plot_price_per_m2_SEI2_cluster(df, n_boot=100):
     df = df[df['DEALNATUREDESCRIPTION'].isin(apts)]
     df['Q'] = pd.to_datetime(df['YQ'])
     fig, ax = plt.subplots(figsize=(15, 5))
-    sns.lineplot(data=df, x='Q', y='NIS_per_M2', hue='SEI2_cluster',
+    sns.lineplot(data=df, x='Q', y=y, hue=hue,
                  ci=95, n_boot=n_boot, palette='Set1', ax=ax)
     ax.grid(True)
     ax.set_xlabel('')
