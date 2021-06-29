@@ -56,12 +56,40 @@ def read_statistical_areas_gis_file(path=work_david):
 def read_bycode_city_data(path=work_david):
     import pandas as pd
     df = pd.read_excel(path/'bycode2019.xlsx')
-    df.columns = ['NameHe', 'city_code', 'transliteration', 'district',
-                  'region', 'natural_area', 'municipal_state',
+    # read index for region, district and area codes:
+    ind_file = path/'index2019.xlsx'
+    idf = pd.read_excel(ind_file, sheet_name='מחוז ונפה', skiprows=2)
+    idf.columns = ['sub-region', 'region', 'district', 'region_code']
+    region_dict = dict(
+        zip(idf['region_code'].dropna().astype(int), idf['region'].dropna()))
+    district_dict = {}
+    district_dict[1] = 'ירושלים'
+    district_dict[2] = 'הצפון'
+    district_dict[3] = 'חיפה'
+    district_dict[4] = 'המרכז'
+    district_dict[5] = 'תל אביב'
+    district_dict[6] = 'הדרום'
+    district_dict[7] = 'יו"ש'
+    district_dict_en = {1: 'Jerusalem', 2: 'North', 3: 'Haifa', 4: 'Center',
+                     5: 'Tel-Aviv', 6: 'South', 7: 'J&S'}
+    idf = pd.read_excel(ind_file, sheet_name='אזור טבעי ', skiprows=2)
+    idf.columns = ['to_drop1', 'comments', 'natural_area',
+                   'sub-district', 'district', 'natural_area_code']
+    idf = idf[[x for x in idf.columns if 'to_drop' not in x]]
+    natural_area_dict = dict(
+        zip(idf['natural_area_code'].dropna().astype(int), idf['natural_area'].dropna()))
+
+    df.columns = ['NameHe', 'city_code', 'transliteration', 'district_code',
+                  'region_code', 'natural_area_code', 'municipal_state',
                   'metropolitan_association', 'city_religion', 'total_pop_2019',
                   'jews+other', 'just_jews', 'arabs', 'founding_year',
                   'city_flow_form', 'organization', 'coords', 'mean_height',
                   'planning_committee', 'police', 'year', 'NameEn', 'cluster']
+    df['district'] = df['district_code'].map(district_dict)
+    df['region'] = df['region_code'].map(region_dict)
+    df['natural_area'] = df['natural_area_code'].map(natural_area_dict)
+    df['district_EN'] = df['district_code'].map(district_dict_en)
+    df = df.set_index('city_code')
     return df
 
 
