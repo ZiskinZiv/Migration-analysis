@@ -31,10 +31,12 @@ def create_higher_group_category(df, existing_col='SEI_cluster', n_groups=2,
 
 def load_nadlan_deals(path=work_david, csv=True,
                       times=['1998Q1', '2021Q1'], dealamount_iqr=2,
-                      fix_new_status=True, add_SEI2_cluster=True):
+                      fix_new_status=True, add_SEI2_cluster=True,
+                      add_peripheri_data=True):
     import pandas as pd
     import numpy as np
     from Migration_main import path_glob
+    from cbs_procedures import read_periphery_index
     if csv:
         file = path_glob(path, 'Nadlan_deals_processed_*.csv')
         dtypes = {'FULLADRESS': 'object', 'Street': 'object', 'FLOORNO': 'object',
@@ -70,6 +72,15 @@ def load_nadlan_deals(path=work_david, csv=True,
         m = pd.Series(SEI2).explode().sort_values()
         d = {x: y for (x, y) in zip(m.values, m.index)}
         df['SEI2_cluster'] = df['SEI_cluster'].map(d)
+    if add_peripheri_data:
+        pdf = read_periphery_index()
+        cols = ['TLV_proximity_value', 'TLV_proximity_rank', 'PAI_value',
+                'PAI_rank', 'P2015_value', 'P2015_rank', 'P2015_cluster']
+        dicts = [pdf[x].to_dict() for x in cols]
+        series = [df['city_code'].map(x) for x in dicts]
+        pdf1 = pd.concat(series, axis=1)
+        pdf1.columns = cols
+        df = pd.concat([df, pdf1], axis=1)
     return df
 
 
@@ -275,6 +286,23 @@ def plot_room_number_deals(df, rooms_range=[2, 6]):
     ax = sns.barplot(data=dff,x='year', y='Deals', hue='ASSETROOMNUM', palette='Set1')
     ax.grid(True)
     return dff
+
+
+def plot_price_per_m2_SEI2_cluster(df, n_boot=100):
+    import pandas as pd
+    import seaborn as sns
+    import matplotlib.pyplot as plt
+    sns.set_theme(style='ticks', font_scale=1.5)
+    df = df[df['DEALNATUREDESCRIPTION'].isin(apts)]
+    df['Q'] = pd.to_datetime(df['YQ'])
+    fig, ax = plt.subplots(figsize=(15, 5))
+    sns.lineplot(data=df, x='Q', y='NIS_per_M2', hue='SEI2_cluster',
+                 ci=95, n_boot=n_boot, palette='Set1', ax=ax)
+    ax.grid(True)
+    ax.set_xlabel('')
+    ax.set_ylabel(r'Apartment price per m$^2$')
+    fig.tight_layout()
+    return
 
 
 def compare_kiryat_gat_israel_dealamount(df_kg, df_isr):
