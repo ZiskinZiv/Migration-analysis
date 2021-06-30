@@ -291,3 +291,10 @@ def read_cbs_main_indicies(start_date='1997-01', end_date=None,
     # df = pd.DataFrame(data).T  # Write in DF and transpose it
     # df.columns = cols
     return ds
+
+
+def read_various_parameters(path=work_david, file='various_parameters.xlsx'):
+    import pandas as pd
+    df = pd.read_excel(path / file)
+    df = df.set_index('ID')
+    return df
