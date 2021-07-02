@@ -6,6 +6,16 @@ First download all nadlan deals:
 then, do concat_all and save to Nadlan_full_cities folder
 then do recover_neighborhoods_for_all_cities(recover_XY=True)
 then process each df_city
+NEW SEARCH and PROCESS (search by NEIGHBORHOODs):
+1) use neighborhood_city_code_counts.csv file to search for cities/neighborhoods
+2) for each city_neighborhood: do body post and parse to dataframe
+3) now go over each row and try to fill in cols:
+    X, Y: from body requests with the FULLADRESS
+    if no FULLADRESS try:
+        get_XY_coords_using_GUSH and get_address_using_PARCEL_ID
+4) now search for historic deals if TREND_FORMAT != ''
+
+
 @author: ziskin
 """
 # TODO: each call to body with street name yields district, city and street
@@ -19,6 +29,7 @@ apts = ['דירה', 'דירה בבית קומות']
 
 intel_kiryat_gat = [31.599645, 34.785265]
 
+
 def transform_lat_lon_point_to_new_israel(lat, lon):
     from pyproj import Transformer
     from shapely.geometry import Point
@@ -26,7 +37,9 @@ def transform_lat_lon_point_to_new_israel(lat, lon):
     p = transformer.transform(lon, lat)
     return Point(p)
 
-intel_kiryat_gat_ITM = transform_lat_lon_point_to_new_israel(34.785265, 31.599645)
+
+intel_kiryat_gat_ITM = transform_lat_lon_point_to_new_israel(
+    34.785265, 31.599645)
 
 
 def produce_dfs_for_circles_around_point(point=intel_kiryat_gat_ITM,
@@ -36,42 +49,48 @@ def produce_dfs_for_circles_around_point(point=intel_kiryat_gat_ITM,
     from Migration_main import path_glob
     from cbs_procedures import geo_location_settelments_israel
     import pandas as pd
-    print('Producing nadlan deals with cities around point {} with radii of {} to {} kms.'.format(point, min_dis, max_dis))
+    print('Producing nadlan deals with cities around point {} with radii of {} to {} kms.'.format(
+        point, min_dis, max_dis))
     df = geo_location_settelments_israel(path)
     df_radii = filter_df_with_distance_from_point(df, point,
                                                   min_distance=min_dis, max_distance=max_dis)
     cities_radii = [x for x in df_radii['city_code']]
     files = path_glob(nadlan_path, '*/')
     available_city_codes = [x.as_posix().split('/')[-1] for x in files]
-    available_city_codes = [int(x) for x in available_city_codes if x.isdigit()]
+    available_city_codes = [int(x)
+                            for x in available_city_codes if x.isdigit()]
     dfs = []
     cnt = 1
     for city_code in cities_radii:
         if city_code in available_city_codes:
             print(city_code)
             # print('found {} city.'.format(city_code))
-            df = concat_all_nadlan_deals_from_one_city_and_save(city_code=int(city_code))
+            df = concat_all_nadlan_deals_from_one_city_and_save(
+                city_code=int(city_code))
             if not df.empty:
                 dfs.append(df)
                 cnt += 1
     print('found total {} cities within {}-{} km radius.'.format(cnt, min_dis, max_dis))
     df = pd.concat(dfs, axis=0)
     if savepath is not None:
-        filename = 'Nadlan_deals_around_{}_{}-{}.csv'.format(point_name, min_dis, max_dis)
+        filename = 'Nadlan_deals_around_{}_{}-{}.csv'.format(
+            point_name, min_dis, max_dis)
         df.to_csv(savepath/filename, na_rep='None', index=False)
         print('{} was saved to {}.'.format(filename, savepath))
     return df
 
+
 def produce_n_largest_cities_nadlan_time_series(df, col='NIS_per_M2', n=10):
     import pandas as pd
-    df= df[df['DEALNATUREDESCRIPTION'].isin(apts)]
-    cities=get_all_city_codes_from_largest_to_smallest()
+    df = df[df['DEALNATUREDESCRIPTION'].isin(apts)]
+    cities = get_all_city_codes_from_largest_to_smallest()
     inds = cities.iloc[0:n].index
     dfs = []
     for ind in inds:
         print('producing time seires for {}'.format(ind))
-        city_df = df[df['city_code']==ind]
-        city_mean = city_df.set_index('DEALDATETIME').resample('MS')[col].mean().rolling(12, center=True).mean()
+        city_df = df[df['city_code'] == ind]
+        city_mean = city_df.set_index('DEALDATETIME').resample(
+            'MS')[col].mean().rolling(12, center=True).mean()
         city_mean = city_mean.to_frame('{}_{}'.format(col, ind))
         city_mean.index.name = ''
         dfs.append(city_mean)
@@ -99,13 +118,13 @@ def tries_requests_example():
     for i in range(tries):
         try:
             for file in files:
-                city_code=file.as_posix().split('/')[-1]
+                city_code = file.as_posix().split('/')[-1]
                 try:
                     get_historic_deals_for_city_code(city_code=city_code)
                 except FileNotFoundError:
                     continue
         except ConnectionError:
-            if i<tries -1:
+            if i < tries - 1:
                 print('retrying...')
                 sleep_between(5, 10)
                 continue
@@ -119,13 +138,14 @@ def tries_requests_example():
         try:
             for c in reversed(cc):
                 try:
-                    get_all_no_street_nadlan_deals_from_settelment(city_code=c, savepath=nadlan_path/str(c),pop_warn=None)
+                    get_all_no_street_nadlan_deals_from_settelment(
+                        city_code=c, savepath=nadlan_path/str(c), pop_warn=None)
                 except UnboundLocalError:
                     continue
         except RequestException:
-            if i< tries -1:
+            if i < tries - 1:
                 print('retrying...')
-                sleep_between(5,10)
+                sleep_between(5, 10)
                 continue
             else:
                 raise
@@ -215,7 +235,8 @@ def recover_neighborhoods_for_all_cities(path=nadlan_path/'Nadlan_full_cities',
     # files = path_glob(nadlan_path, 'Nadlan_deals_city_*_street_*.csv')
     city_codes = [x.as_posix().split('/')[-1] for x in folders]
     city_codes = sorted(np.unique(city_codes))
-    print('found {} city codes: {}'.format(len(city_codes), ', '.join(city_codes)))
+    print('found {} city codes: {}'.format(
+        len(city_codes), ', '.join(city_codes)))
 
     for city_code in sorted(city_codes):
         try:
@@ -230,7 +251,8 @@ def recover_neighborhoods_for_one_city(path=nadlan_path/'Nadlan_full_cities',
                                        city_code=8700, gdf=None):
     from Migration_main import path_glob
     import pandas as pd
-    file = path_glob(path, 'Nadlan_deals_city_{}_all_streets_*.csv'.format(city_code))
+    file = path_glob(
+        path, 'Nadlan_deals_city_{}_all_streets_*.csv'.format(city_code))
     file = file[0]
     if 'recovered_neighborhoods' in file.as_posix():
         print('{} already recovered_neighborhoods, skipping...'.format(file))
@@ -245,7 +267,8 @@ def recover_neighborhoods_for_one_city(path=nadlan_path/'Nadlan_full_cities',
         print('no empty neighborhoods in {} found.'.format(city_code))
         return
     filename = file.as_posix().split('/')[-1]
-    filename = '_'.join(filename.split('_')[:-1]) + '_recovered_neighborhoods' + '_h.csv'
+    filename = '_'.join(filename.split(
+        '_')[:-1]) + '_recovered_neighborhoods' + '_h.csv'
     df.to_csv(path/filename, na_rep='None', index=False)
     print('Successfully saved {}'.format(filename))
     file.unlink()
@@ -309,17 +332,18 @@ def recover_XY_for_all_no_streets(nadlan_path=nadlan_path):
 def recover_XY_for_one_city(nadlan_path=nadlan_path, city_code=8400):
     from Migration_main import path_glob
     import pandas as pd
-    files = sorted(path_glob(nadlan_path/str(city_code), 'Nadlan_deals_city_{}_no_streets_*_h.csv'.format(city_code)))
+    files = sorted(path_glob(nadlan_path/str(city_code),
+                             'Nadlan_deals_city_{}_no_streets_*_h.csv'.format(city_code)))
     file = files[0]
     print('processing recovery of XY in city code: {}'.format(city_code))
-    if 'recovered' not in file.as_posix() and len(files)==2:
+    if 'recovered' not in file.as_posix() and len(files) == 2:
         file.unlink()
         print('deleted {}'.format(file))
         return
-    elif 'recovered' in file.as_posix() and len(files)==1:
+    elif 'recovered' in file.as_posix() and len(files) == 1:
         print('{} already recovered, skipping...'.format(file))
         return
-    elif 'recovered' not in file.as_posix() and len(files)==1:
+    elif 'recovered' not in file.as_posix() and len(files) == 1:
         df = pd.read_csv(file, na_values='None')
         try:
             df = recover_XY_address_and_neighborhoods_using_GUSH(df)
@@ -329,8 +353,10 @@ def recover_XY_for_one_city(nadlan_path=nadlan_path, city_code=8400):
             return
         filename = file.as_posix().split('/')[-1]
         if '_recovered' not in filename:
-            filename = '_'.join(filename.split('_')[:-1]) + '_recovered' + '_h.csv'
-        df.to_csv(nadlan_path/str(city_code)/filename, na_rep='None', index=False)
+            filename = '_'.join(filename.split(
+                '_')[:-1]) + '_recovered' + '_h.csv'
+        df.to_csv(nadlan_path/str(city_code) /
+                  filename, na_rep='None', index=False)
         print('Successfully saved {}'.format(filename))
         # if '_recovered' not in filename:
         # now delete the old file:
@@ -437,9 +463,10 @@ def get_address_using_PARCEL_ID(parcel_id='596179', return_first_address=True):
         st = row['Street']
         fa.append('{} {}, {}'.format(st, bi, ci))
     df['FULLADRESS'] = fa
-    df.drop(['Values','Created','IsEditable'], axis=1, inplace=True)
+    df.drop(['Values', 'Created', 'IsEditable'], axis=1, inplace=True)
     if return_first_address:
-        print('Succsefully recoverd first address as {}'.format(df.iloc[0]['FULLADRESS']))
+        print('Succsefully recoverd first address as {}'.format(
+            df.iloc[0]['FULLADRESS']))
         return df.iloc[0]
     else:
         return df
@@ -481,7 +508,8 @@ def filter_df_with_distance_from_point(df, point, min_distance=0,
     if not isinstance(df, gpd.GeoDataFrame):
         print('dataframe is not GeoDataFrame!')
         return
-    print('fitering nadlan deals from {} to {} km distance from {}'.format(min_distance, max_distance, point))
+    print('fitering nadlan deals from {} to {} km distance from {}'.format(
+        min_distance, max_distance, point))
     df['distance_to_point'] = df.distance(point) / 1000.0
     df = df.loc[(df['distance_to_point'] >= min_distance) &
                 (df['distance_to_point'] < max_distance)]
@@ -505,10 +533,10 @@ def concat_all_processed_nadlan_deals_and_save(path=nadlan_path/'Nadlan_full_cit
     import pandas as pd
     files = path_glob(path, 'Nadlan_deals_processed_city_*_all_streets_*.csv')
     print('loading and concating {} cities.'.format(len(files)))
-    dtypes = {'FULLADRESS': 'object', 'Street': 'object','FLOORNO':'object',
+    dtypes = {'FULLADRESS': 'object', 'Street': 'object', 'FLOORNO': 'object',
               'NEWPROJECTTEXT': 'object', 'PROJECTNAME': 'object'}
     dfs = [pd.read_csv(file, na_values='None', parse_dates=['DEALDATETIME'],
-           dtype=dtypes) for file in files]
+                       dtype=dtypes) for file in files]
     df = pd.concat(dfs, axis=0)
     yrmin = df['DEALDATETIME'].min().year
     yrmax = df['DEALDATETIME'].max().year
@@ -528,7 +556,8 @@ def process_nadlan_deals_from_all_cities(path=nadlan_path/'Nadlan_full_cities'):
     files = path_glob(path, 'Nadlan_deals_city_*_all_streets_*.csv')
     total = len(files)
     for i, file in enumerate(files):
-        dtypes = {'FULLADRESS': 'string', 'Street': 'string','FLOORNO':'string'}
+        dtypes = {'FULLADRESS': 'string',
+                  'Street': 'string', 'FLOORNO': 'string'}
         df = pd.read_csv(file, na_values='None', parse_dates=['DEALDATETIME'],
                          dtype=dtypes)
         city = df['City'].unique()[0]
@@ -615,10 +644,12 @@ def concat_all_nadlan_deals_from_all_cities_and_save(nadlan_path=work_david/'Nad
     # files = path_glob(nadlan_path, 'Nadlan_deals_city_*_street_*.csv')
     city_codes = [x.as_posix().split('/')[-1] for x in folders]
     city_codes = np.unique(city_codes)
-    print('found {} city codes: {}'.format(len(city_codes), ', '.join(city_codes)))
+    print('found {} city codes: {}'.format(
+        len(city_codes), ', '.join(city_codes)))
     for city_code in sorted(city_codes):
         concat_all_nadlan_deals_from_one_city_and_save(nadlan_path=nadlan_path,
-                                                       city_code=int(city_code),
+                                                       city_code=int(
+                                                           city_code),
                                                        savepath=savepath,
                                                        delete_files=delete_files,
                                                        drop_dup=drop_dup)
@@ -644,7 +675,8 @@ def get_historic_deals_for_city_code(main_path=nadlan_path, city_code=8700):
     import os
     import pandas as pd
     # from pathlib import Path
-    streets = path_glob(main_path / str(city_code), 'Nadlan_deals_city_{}_*street*.csv'.format(city_code))
+    streets = path_glob(main_path / str(city_code),
+                        'Nadlan_deals_city_{}_*street*.csv'.format(city_code))
     # check for the h suffix and filter these files out (already done historic):
     streets = [x for x in streets if '_h' not in x.as_posix().split('/')[-1]]
     print('Found {} streets to check in {}.'.format(len(streets), city_code))
@@ -685,7 +717,8 @@ def get_historic_nadlan_deals_from_a_street_df(df, unique=True):
     city = df['City'].iloc[0]
     street = df['Street'].iloc[0]
     total_keys = len(df)
-    print('Fetching historic deals on {} street in {} (total {} assets).'.format(street, city, total_keys))
+    print('Fetching historic deals on {} street in {} (total {} assets).'.format(
+        street, city, total_keys))
     cnt = 0
     dfs = []
     for i, row in df.iterrows():
@@ -758,7 +791,8 @@ def concat_all_nadlan_deals_from_one_city_and_save(nadlan_path=work_david/'Nadla
     df = pd.concat(dfs)
     df['DEALDATETIME'] = pd.to_datetime(df['DEALDATETIME'])
     df.drop(['DEALDATE', 'DISPLAYADRESS'], axis=1, inplace=True)
-    print('concated all {} ({}) csv files.'.format(df['City'].unique()[0] , city_code))
+    print('concated all {} ({}) csv files.'.format(
+        df['City'].unique()[0], city_code))
     df = df.sort_index()
     df = df.iloc[:, 2:]
     # first drop records with no full address:
@@ -779,7 +813,8 @@ def concat_all_nadlan_deals_from_one_city_and_save(nadlan_path=work_david/'Nadla
     df = df[df['City'] == good_city]
     # take care of street_code columns all but duplicates bc of neighhood code/street code:
     if drop_dup:
-        df = df.drop_duplicates(subset=df.columns.difference(['street_code', 'Street']))
+        df = df.drop_duplicates(
+            subset=df.columns.difference(['street_code', 'Street']))
     # lasty, extract Building number from FULLADRESS and is NaN remove record:
     df['Building'] = df['FULLADRESS'].astype(str).str.extract('(\d+)')
     # df = df[~df['Building'].isna()]
@@ -791,7 +826,8 @@ def concat_all_nadlan_deals_from_one_city_and_save(nadlan_path=work_david/'Nadla
         df.to_csv(savepath/filename, na_rep='None')
         print('{} was saved to {}'.format(filename, savepath))
     if delete_files:
-        msg = 'Deleting all {} city files, Do you want to continue?'.format(city_code)
+        msg = 'Deleting all {} city files, Do you want to continue?'.format(
+            city_code)
         if click.confirm(msg, default=True):
             [x.unlink() for x in files]
             print('{} files were deleted.'.format(city_code))
@@ -846,7 +882,8 @@ def get_all_nadlan_deals_from_one_city(path=work_david, city_code=5000,
         if sleep_between_streets is not None:
             sleep_between(sleep_between_streets[0], sleep_between_streets[1])
         cnt += 1
-    print('Done scraping {} city ({}) from nadlan.gov.il'.format(city_name, city_code))
+    print('Done scraping {} city ({}) from nadlan.gov.il'.format(
+        city_name, city_code))
 
     if savepath is not None:
         filename = 'Nadlan_missing_streets_{}.csv'.format(city_code)
@@ -865,8 +902,8 @@ def get_all_city_codes_from_largest_to_smallest(path=work_david):
 
 def parse_one_json_nadlan_page_to_pandas(page, city_code=None,
                                          street_code=None,
-                                         historic=False,
-                                         keep_no_address=False):
+                                         historic=False, add_extra_cols=True):
+    # keep_no_address=False):
     """parse one request of nadlan deals JSON to pandas"""
     import pandas as pd
     if historic:
@@ -876,34 +913,51 @@ def parse_one_json_nadlan_page_to_pandas(page, city_code=None,
     # df.set_index('DEALDATETIME', inplace=True)
     # df.index = pd.to_datetime(df.index)
     df['DEALDATETIME'] = pd.to_datetime(df['DEALDATETIME'])
-    df['DEALAMOUNT'] = df['DEALAMOUNT'].str.replace(',','').astype(int)
+    df['DEALAMOUNT'] = df['DEALAMOUNT'].str.replace(',', '').astype(int)
+    # M^2:
     df['DEALNATURE'] = pd.to_numeric(df['DEALNATURE'])
+    # room number:
     df['ASSETROOMNUM'] = pd.to_numeric(df['ASSETROOMNUM'])
+    # building year:
+    df['BUILDINGYEAR'] = pd.to_numeric(df['BUILDINGYEAR'])
+    # number of floors in building:
+    df['BUILDINGFLOORS'] = pd.to_numeric(df['BUILDINGFLOORS'])
+    # if new from contractor (1st hand):
+    df['NEWPROJECTTEXT'] = pd.to_numeric(
+        df['NEWPROJECTTEXT']).fillna(0).astype(bool)
+    # id TREND_FORMAT != '' , check for historic deals
     if city_code is not None:
         df['city_code'] = city_code
     if street_code is not None:
         df['street_code'] = street_code
-    if keep_no_address:
-        df = df[df['FULLADRESS']=='']
+    # if keep_no_address:
+    #     df = df[df['FULLADRESS']=='']
+    if add_extra_cols:
+        df = df.reindex(df.columns.tolist() + ['ObjectID', 'DescLayerID', 'X', 'Y', 'District', 'City', 'Neighborhood',
+                                               'Street'], axis=1)
+        df['DescLayerID'] = df['DescLayerID'].astype(str)
     return df
 
 
 def produce_nadlan_rest_request(city='רעננה', street='אחוזה',
-                                full_address=None):
+                                just_neighborhoods=True):
+    # full_address=None):
     """produce the body of nadlan deals request, also usfull for geolocations"""
     import requests
-    if full_address is not None:
-        url = 'https://www.nadlan.gov.il/Nadlan.REST/Main/GetDataByQuery?query={}'.format(full_address)
-    else:
-        url = 'https://www.nadlan.gov.il/Nadlan.REST/Main/GetDataByQuery?query={} {}'.format(city, street)
+    # if full_address is not None:
+    # url = 'https://www.nadlan.gov.il/Nadlan.REST/Main/GetDataByQuery?query={}'.format(full_address)
+    # else:
+    url = 'https://www.nadlan.gov.il/Nadlan.REST/Main/GetDataByQuery?query={} {}'.format(
+        city, street)
     r = requests.get(url)
     body = r.json()
     if r.status_code != 200:
         raise ValueError('couldnt get a response.')
-    if body['ResultType'] != 1 and full_address is None:
-        raise TypeError(body['ResultLable'])
-    if body['DescLayerID'] == 'NEIGHBORHOODS_AREA':
-        raise TypeError('result is a NEIGHBORHOOD!, skipping')
+    # if body['ResultType'] != 1 and full_address is None:
+    #     raise TypeError(body['ResultLable'])
+    if just_neighborhoods:
+        if body['DescLayerID'] != 'NEIGHBORHOODS_AREA':
+            raise TypeError('result is not a NEIGHBORHOOD!, skipping')
     if body['PageNo'] == 0:
         body['PageNo'] = 1
     return body
@@ -930,7 +984,8 @@ def parse_body_request_to_dataframe(body):
         navs = body['Navs']
         if navs is not None:
             nav_dict = {}
-            order_dict = {1: 'District', 2: 'City', 3: 'Neighborhood', 4: 'Street'}
+            order_dict = {1: 'District', 2: 'City',
+                          3: 'Neighborhood', 4: 'Street'}
             for list_item in navs:
                 nav_dict[order_dict[list_item['order']]] = list_item['text']
             nav_df = pd.DataFrame.from_dict(nav_dict, orient='index').T
@@ -938,7 +993,7 @@ def parse_body_request_to_dataframe(body):
                 if order not in nav_df.columns:
                     nav_df[order] = ''
             # nav_df = pd.Series([navs[x]['text']
-                                # for x in range(len(navs))]).to_frame().T
+                    # for x in range(len(navs))]).to_frame().T
         else:
             nav_df = pd.DataFrame(['', '', '', '']).T
             nav_df.columns = ['District', 'City', 'Neighborhood', 'Street']
@@ -962,11 +1017,13 @@ def get_all_no_street_nadlan_deals_from_settelment(city_code=1324,
     if pop_warn is not None:
         pop = city_codes.loc[city_code]['Pop2015']
         if pop >= pop_warn:
-            raise ValueError('population of {} is {} (>={})!'.format(city_name, pop, pop_warn))
+            raise ValueError('population of {} is {} (>={})!'.format(
+                city_name, pop, pop_warn))
     if not savepath.is_dir():
         print('Folder {} not found...Creating it.'.format(savepath))
         os.mkdir(savepath)
-    get_all_no_street_nadlan_deals(city=city_name, city_code=city_code, savepath=savepath)
+    get_all_no_street_nadlan_deals(
+        city=city_name, city_code=city_code, savepath=savepath)
     return
 
 
@@ -981,7 +1038,8 @@ def get_all_no_street_nadlan_deals(city='ארסוף', city_code=1324,
     print('Fetching all NO streets nadlan deals in {} ({})'.format(city, city_code))
     if check_for_downloaded_files and savepath is not None:
         try:
-            file = path_glob(savepath, 'Nadlan_deals_city_{}_no_streets_*.csv'.format(city_code))
+            file = path_glob(
+                savepath, 'Nadlan_deals_city_{}_no_streets_*.csv'.format(city_code))
             print('{} already found, skipping...'.format(file))
             return pd.DataFrame()
         except FileNotFoundError:
@@ -994,8 +1052,10 @@ def get_all_no_street_nadlan_deals(city='ארסוף', city_code=1324,
         print('searched term {} did not result in settelment but something else...'.format(city))
         return None
     try:
-        page_files = path_glob(savepath/'page_temp', 'Nadlan_deals_city_{}_no_streets_page_*.csv'.format(city_code))
-        pages = [x.as_posix().split('/')[-1].split('.')[0].split('_')[-1] for x in page_files]
+        page_files = path_glob(
+            savepath/'page_temp', 'Nadlan_deals_city_{}_no_streets_page_*.csv'.format(city_code))
+        pages = [x.as_posix().split('/')[-1].split('.')[0].split('_')[-1]
+                 for x in page_files]
         pages = sorted([int(x) for x in pages])
         cnt = int(pages[-1])
         print(cnt)
@@ -1024,9 +1084,9 @@ def get_all_no_street_nadlan_deals(city='ארסוף', city_code=1324,
         elif no_results and cnt == 1:
             return pd.DataFrame()
         filename = 'Nadlan_deals_city_{}_no_streets_page_{}.csv'.format(
-                city_code, cnt)
+            city_code, cnt)
         df1 = parse_one_json_nadlan_page_to_pandas(
-                result, city_code, np.nan, keep_no_address=True)
+            result, city_code, np.nan, keep_no_address=True)
         if not df1.empty:
             if not (savepath/'page_temp').is_dir():
                 os.mkdir(savepath/'page_temp')
@@ -1041,8 +1101,10 @@ def get_all_no_street_nadlan_deals(city='ארסוף', city_code=1324,
             body['PageNo'] += 1
         no_results = False
     # now after finished, find all temp pages and concat them:
-    page_files = path_glob(savepath/'page_temp', 'Nadlan_deals_city_{}_no_streets_page_*.csv'.format(city_code))
-    page_dfs = [pd.read_csv(x, na_values=np.nan, parse_dates=['DEALDATETIME']) for x in page_files]
+    page_files = path_glob(
+        savepath/'page_temp', 'Nadlan_deals_city_{}_no_streets_page_*.csv'.format(city_code))
+    page_dfs = [pd.read_csv(x, na_values=np.nan, parse_dates=[
+                            'DEALDATETIME']) for x in page_files]
     df = pd.concat(page_dfs)
     df = df.reset_index()
     df = df.sort_index()
@@ -1074,7 +1136,8 @@ def get_all_historical_nadlan_deals(city='רעננה', street='אחוזה',
     from Migration_main import path_glob
     if check_for_downloaded_files and savepath is not None:
         try:
-            file = path_glob(savepath, 'Nadlan_deals_city_{}_street_{}_*.csv'.format(city_code, street_code))
+            file = path_glob(
+                savepath, 'Nadlan_deals_city_{}_street_{}_*.csv'.format(city_code, street_code))
             print('{} already found, skipping...'.format(file))
             return pd.DataFrame()
         except FileNotFoundError:
@@ -1094,7 +1157,7 @@ def get_all_historical_nadlan_deals(city='רעננה', street='אחוזה',
         except TypeError:
             no_results = True
             # if cnt > 1:
-                # pass
+            # pass
             # else:
             return pd.DataFrame()
         except ValueError:
@@ -1139,7 +1202,8 @@ def get_all_historical_nadlan_deals(city='רעננה', street='אחוזה',
     df = pd.concat([df, loc_df_street.sort_index()], axis=1)
     # fill in district and city, street:
     try:
-        good_district = df['District'].unique()[df['District'].unique() != ''][0]
+        good_district = df['District'].unique(
+        )[df['District'].unique() != ''][0]
     except IndexError:
         good_district = ''
     df.loc[df['District'] == '', 'District'] = good_district
@@ -1155,3 +1219,304 @@ def get_all_historical_nadlan_deals(city='רעננה', street='אחוזה',
     return df
 
 
+def read_neighborhood_city_file(path=work_david, file='neighborhood_city_code_counts.csv',
+                                add_auto_complete=True):
+    import pandas as pd
+    import numpy as np
+    from cbs_procedures import read_bycode_city_data
+    df = pd.read_csv(path/file)
+    df.columns = ['city_code', 'Neighborhood', 'to_drop']
+    df = df[[x for x in df.columns if 'to_drop' not in x]]
+    # filter שכונת:
+    df['Neighborhood'] = df['Neighborhood'].str.replace('שכונת', '')
+    df['Neighborhood'] = df['Neighborhood'].str.strip()
+    if add_auto_complete:
+        # add neighborhhod data from autocomplete:
+        auto = pd.read_csv(path/'neighborhoods_auto_complete.csv')
+        auto = auto.drop('Unnamed: 0', axis=1)
+        dfs = []
+        for cc in auto['city_code'].unique():
+            if cc in df['city_code'].unique():
+                nvals = auto[auto['city_code']==cc]['Value'].values
+                df_vals = df[df['city_code']==cc]['Neighborhood'].values
+                merged = pd.Series(list(set(nvals).union(set(df_vals))))
+                mdf = merged.to_frame('Neighborhood')
+                mdf['city_code'] = cc
+                dfs.append(mdf)
+            else:
+                nvals = list(set(auto[auto['city_code']==cc]['Value'].values))
+                merged = pd.Series(nvals)
+                mdf = merged.to_frame('Neighborhood')
+                mdf['city_code'] = cc
+                dfs.append(mdf)
+        df = pd.concat(dfs, axis=0)
+        df = df.reset_index(drop=True)
+    df = df.drop_duplicates()
+    df['neighborhood_code'] = ''
+    df['City'] = ''
+    bycode = read_bycode_city_data(path)
+    df['City'] = df['city_code'].map(bycode['NameHe'].to_dict())
+    grps = df.groupby('city_code').groups
+    for cc, inds in grps.items():
+        n = len(inds)
+        df.loc[inds, 'neighborhood_code'] = np.arange(1, n+1)
+    df = df[['city_code', 'City', 'neighborhood_code', 'Neighborhood']]
+    # fix *:
+    df['City'] = df['City'].str.replace('*', '')
+    df = df.dropna()
+    return df
+
+
+def neighborhoods_auto_complete_for_all_cities(path=work_david):
+    import pandas as pd
+    cities = get_all_city_codes_from_largest_to_smallest(path)
+    dfs = []
+    for city_code in cities.index:
+        print('getting {} neighborhoods from autocomplete.'.format(city_code))
+        df = auto_complete_neighborhoods_for_one_city(cities, path=path,
+                                                      city_code=city_code)
+        dfs.append(df)
+        sleep_between(0.1, 0.15)
+    df = pd.concat(dfs, axis=0)
+    return df
+
+
+def auto_complete_neighborhoods_for_one_city(city_df, path=work_david, city_code=8700):
+    import requests
+    city = city_df.loc[city_code]['NameHe']
+    city = city.replace('-', ' ')
+    search_term = '{} ,{}'.format('שכונה', city)
+    url = 'https://www.nadlan.gov.il/TldSearch//api/AutoComplete?query={}&ids=16399'.format(search_term)
+    r = requests.get(url)
+    if r.status_code != 200:
+        raise ValueError('couldnt get a response ({}).'.format(r.status_code))
+    df = parse_autocomplete_neighbors(r.json())
+    df['Value'] = df['Value'].str.replace(city, '')
+    df['Value'] = df['Value'].str.strip()
+    df['City'] = city
+    df['city_code'] = city_code
+    return df
+
+
+def parse_autocomplete_neighbors(json):
+    import pandas as pd
+    try:
+        df = pd.DataFrame(json['res']['NEIGHBORHOOD'])
+        df = df.drop(['Data', 'Rank'], axis=1)
+    except KeyError:
+        df = pd.DataFrame(['', '']).T
+        df.columns = ['Key', 'Value']
+    return df
+
+
+def process_one_page_from_neighborhoods_search(result_page):
+    """take one result page from post_nadlan_rest, specifically
+    neighborhoods searchs and process it"""
+    import pandas as pd
+    df = parse_one_json_nadlan_page_to_pandas(result_page)
+    hdfs = []
+    for i, row in df.iterrows():
+        full_addr = row['FULLADRESS'].strip()
+        disp_addr = row['DISPLAYADRESS'].strip()
+        keyvalue = row['KEYVALUE']
+        has_historic = row['TREND_FORMAT'] != ''
+        if full_addr != '' and disp_addr != '':
+            body = produce_nadlan_rest_request(*full_addr.split(','),
+                                               just_neighborhoods=False)
+            sleep_between(0.05, 0.1)
+            df_extra = parse_body_request_to_dataframe(body)
+            df.loc[i, 'ObjectID':'Street'] = df_extra.T[0]
+        else:
+            try:
+                x, y, parcel_id = get_XY_coords_using_GUSH(row['GUSH'])
+                df.at[i, 'X'] = x
+                df.at[i, 'Y'] = y
+                df.at[i, 'ObjectID'] = parcel_id
+                df.at[i, 'DescLayerID'] = 'XY_recovered'
+                sleep_between(0.05, 0.1)
+            except ValueError:
+                print('No X, Y found for {}.'.format(row['GUSH']))
+                parcel_id = '0'
+                pass
+            try:
+                df_address = get_address_using_PARCEL_ID(parcel_id)
+                df.at[i, 'FULLADRESS'] = df_address['FULLADRESS']
+                df.at[i, 'Street'] = df_address['Street']
+                sleep_between(0.05, 0.1)
+                df.at[i, 'DescLayerID'] = 'ADDR_V1_recovered'
+            except ValueError:
+                print('No address found for {}.'.format(row['GUSH']))
+                pass
+        # now get historic deals:
+        if has_historic:
+            try:
+                result = post_nadlan_historic_deals(keyvalue)
+                sleep_between(0.05, 0.1)
+            except TypeError:
+                continue
+            df_historic = parse_one_json_nadlan_page_to_pandas(result, historic=True)
+            for ii, roww in df_historic.iterrows():
+                df_historic.loc[ii, 'ObjectID':'Street'] = df.loc[i, 'ObjectID':'Street']
+            hdfs.append(df_historic)
+    # if no historic deals at all:
+    if hdfs:
+        hdf = pd.concat(hdfs, axis=0)
+        df = pd.concat([df, hdf], axis=0)
+    return df
+
+
+def process_all_city_nadlan_neighborhood_search(savepath=work_david/'Nadlan_deals_by_neighborhood',
+                                                city_code=8700, ncode=None, path=work_david):
+    import os
+    from Migration_main import path_glob
+    import numpy as np
+    city_path = savepath / '{}'.format(city_code)
+    if not (city_path).is_dir():
+        os.mkdir(city_path)
+        print('{} was created.'.format(city_path))
+
+    ndf = read_neighborhood_city_file(path)
+    city_ndf = ndf[ndf['city_code'] == city_code]
+    ns = city_ndf['City'].size
+    city = city_ndf['City'].unique().item()
+    if ncode is None:
+        print('processing city {} with {} neighborhoods.'.format(city, ns))
+        try:
+            n_files = path_glob(
+                city_path, 'Nadlan_deals_city_*_neighborhood_*.csv'.format(city_code))
+            ns = [x.as_posix().split('/')[-1].split('.')[0].split('_')[-2]
+                  for x in n_files]
+            ns = sorted([int(x) for x in ns])
+            curr_n = int(ns[-1]) + 1
+            print('last neighborhood found is {}, strating at {}.'.format(
+                curr_n - 1, curr_n))
+            n_codes = np.arange(curr_n, len(city_ndf['neighborhood_code']) + 1)
+        except FileNotFoundError:
+            n_codes = city_ndf['neighborhood_code']
+            pass
+
+        for n in n_codes:
+            try:
+                process_all_pages_for_nadlan_neighborhood_search(
+                    city_path, ndf, city_code=city_code, neighborhood_code=n)
+            except TypeError as e:
+                print(e)
+                continue
+    else:
+        process_all_pages_for_nadlan_neighborhood_search(
+            city_path, ndf, city_code=city_code, neighborhood_code=ncode)
+    return
+
+
+def process_all_pages_for_nadlan_neighborhood_search(savepath, city_ndf,
+                                                     city_code=8700,
+                                                     neighborhood_code=1):
+    from Migration_main import path_glob
+    import pandas as pd
+    import os
+    import numpy as np
+    city_df = city_ndf[city_ndf['city_code'] == city_code]
+    city = city_df['City'].unique()[0]
+    neighborhood = city_df[city_df['neighborhood_code']
+                           == neighborhood_code]['Neighborhood'].item()
+    try:
+        page_files = path_glob(
+            savepath/'page_temp', 'Nadlan_deals_city_{}_neighborhood_{}_*.csv'.format(city_code, neighborhood_code))
+        pages = [x.as_posix().split('/')[-1].split('.')[0].split('_')[-1]
+                 for x in page_files]
+        pages = sorted([int(x) for x in pages])
+        cnt = int(pages[-1]) + 1
+        print('last page found is {}, strating at {}.'.format(cnt-1, cnt))
+    except FileNotFoundError:
+        cnt = 1
+        pass
+    print('searching for {} neighborhood ({}) in {} ({}).'.format(neighborhood, neighborhood_code, city, city_code))
+    body = produce_nadlan_rest_request(
+        city, neighborhood, just_neighborhoods=True)
+    body['PageNo'] = cnt
+    page_dfs = []
+    # cnt = 1
+    last_page = False
+    no_results = False
+    # check if cnt -1 is the last page in body:
+    b = body.copy()
+    b['PageNo'] = cnt - 1
+    try:
+        result = post_nadlan_rest(b)
+        if result['IsLastPage']:
+            last_page = True
+    except ValueError:
+        pass
+    while not last_page:
+        print('fetching nadlan deals for {} in {}, page : {}'.format(neighborhood, city, cnt))
+        try:
+            result = post_nadlan_rest(body)
+        except TypeError:
+            no_results = True
+            return pd.DataFrame()
+        except ValueError:
+            no_results = True
+            # if cnt > 1:
+            # else:
+            # return pd.DataFrame()
+        if no_results and cnt > 1:
+            last_page = True
+        elif no_results and cnt == 1:
+            return pd.DataFrame()
+        filename = 'Nadlan_deals_city_{}_neighborhood_{}_page_{}.csv'.format(
+            city_code, neighborhood_code, cnt)
+        df = process_one_page_from_neighborhoods_search(result)
+        if not df['City'].value_counts().empty:
+            try:
+                vc_city = [x for x in df['City'].value_counts().index if x != ''][0]
+            except IndexError:
+                vc_city = city
+                pass
+            try:
+                assert vc_city == city
+                df.loc[:, 'City'] = city
+            except AssertionError:
+                df.loc[:, 'City'] = ''
+                pass
+        if not df['Neighborhood'].value_counts().empty:
+            try:
+                vc_n = [x for x in df['Neighborhood'].value_counts().index if x != ''][0]
+                n_from_search = vc_n.replace('שכונת', '')
+                n_from_search = n_from_search.strip()
+                n_from_search = n_from_search.replace('ורבורג', 'וורבורג')
+            except IndexError:
+                n_from_search = neighborhood
+            try:
+                assert n_from_search == neighborhood
+                df.loc[:, 'Neighborhood'] = neighborhood
+            except AssertionError:
+                df.loc[:, 'Neighborhood'] = ''
+        if not df.empty:
+            if not (savepath/'page_temp').is_dir():
+                os.mkdir(savepath/'page_temp')
+                print('{} was created.'.format(savepath/'page_temp'))
+            df.to_csv(savepath/'page_temp'/filename, na_rep='None', index=False)
+            print('Page {} was saved to {}.'.format(cnt, savepath))
+        page_dfs.append(df)
+        cnt += 1
+        if result['IsLastPage']:
+            last_page = True
+        else:
+            body['PageNo'] += 1
+        no_results = False
+    # now after finished, find all temp pages and concat them:
+    page_files = path_glob(
+        savepath/'page_temp', 'Nadlan_deals_city_{}_neighborhood_{}_*.csv'.format(city_code, neighborhood_code))
+    page_dfs = [pd.read_csv(x, na_values=np.nan, parse_dates=[
+                            'DEALDATETIME']) for x in page_files]
+    df = pd.concat(page_dfs)
+    df = df.reset_index(drop=True)
+    df = df.sort_index()
+    if savepath is not None:
+        yrmin = df['DEALDATETIME'].min().year
+        yrmax = df['DEALDATETIME'].max().year
+        filename = 'Nadlan_deals_city_{}_neighborhood_{}_{}-{}.csv'.format(
+            city_code, neighborhood_code, yrmin, yrmax)
+        df.to_csv(savepath/filename, na_rep='None', index=False)
+        print('{} was saved to {}.'.format(filename, savepath))
+    return df

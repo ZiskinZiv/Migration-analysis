@@ -439,3 +439,4 @@ def run_lag_analysis_boi_interest_nadlan(ndf, idf, i_col='effective', months=48)
         idf['{}_{}'.format(i_col, i+1)] = idf[i_col].shift(-i-1)
     return idf
 
+
