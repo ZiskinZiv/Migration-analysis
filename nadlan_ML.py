@@ -7,8 +7,10 @@ Created on Fri Jul  2 15:41:04 2021
 """
 def nadlan_simple_ML(df, year=2000, model_name='RF'):
     import pandas as pd
-    feats = ['DEALNATURE', 'year', 'NEWPROJECTTEXT',
-             'BUILDINGYEAR', 'BUILDINGFLOORS', 'SEI_value', 'P2015_value', 'Ground']
+    import seaborn as sns
+    import matplotlib.pyplot as plt
+    feats = ['DEALNATURE', 'year', 'NEWPROJECTTEXT', 'FLOORNO',
+             'BUILDINGYEAR', 'BUILDINGFLOORS', 'SEI_value', 'P2015_value']
     X = df[[x for x in feats]]
     X = X.dropna()
     y = df['DEALAMOUNT']
@@ -27,7 +29,21 @@ def nadlan_simple_ML(df, year=2000, model_name='RF'):
     dff.columns = ['feature_importances']
     dff = dff.sort_values('feature_importances', ascending=False)
     dff.plot(kind='barh')
-    return model
+    plt.figure()
+    sns.heatmap(X.corr(), annot=True)
+    return X, y, model
+
+
+def cross_validation(X, y, model_name='RF', n_splits=5):
+    from sklearn.model_selection import GridSearchCV
+    ml = ML_Classifier_Switcher()
+    model = ml.pick_model(model_name)
+    param_grid = ml.param_grid
+    gr = GridSearchCV(model, scoring='r2', param_grid=param_grid,
+                      cv=n_splits, verbose=2, n_jobs=-1)
+    gr.fit(X, y)
+    cvr = gr.cv_results_
+    return cvr
 
 
 class ML_Classifier_Switcher(object):
