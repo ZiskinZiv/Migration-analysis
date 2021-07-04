@@ -1397,6 +1397,7 @@ def process_all_city_nadlan_neighborhood_search(savepath=work_david/'Nadlan_deal
 
         for n in n_codes:
             try:
+                # print('neighborhood code: {}'.format(n))
                 process_all_pages_for_nadlan_neighborhood_search(
                     city_path, ndf, city_code=city_code, neighborhood_code=n)
             except TypeError as e:
@@ -1448,7 +1449,7 @@ def process_all_pages_for_nadlan_neighborhood_search(savepath, city_ndf,
     except ValueError:
         pass
     while not last_page:
-        print('fetching nadlan deals for {} in {}, page : {}'.format(neighborhood, city, cnt))
+        print('fetching nadlan deals for {}  ({}) in {}, page : {}'.format(neighborhood, neighborhood_code, city, cnt))
         try:
             result = post_nadlan_rest(body)
         except TypeError:
