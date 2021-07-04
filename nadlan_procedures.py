@@ -1237,16 +1237,16 @@ def read_neighborhood_city_file(path=work_david, file='neighborhood_city_code_co
         dfs = []
         for cc in auto['city_code'].unique():
             if cc in df['city_code'].unique():
-                nvals = auto[auto['city_code']==cc]['Value'].values
-                df_vals = df[df['city_code']==cc]['Neighborhood'].values
-                merged = pd.Series(list(set(nvals).union(set(df_vals))))
-                mdf = merged.to_frame('Neighborhood')
+                nvals = pd.Series(auto[auto['city_code']==cc]['Value'].values)
+                df_vals = pd.Series(df[df['city_code']==cc]['Neighborhood'].values)
+                merged = pd.concat([nvals, df_vals]).drop_duplicates()
+                mdf = merged.to_frame('Neighborhood').reset_index(drop=True)
                 mdf['city_code'] = cc
                 dfs.append(mdf)
             else:
-                nvals = list(set(auto[auto['city_code']==cc]['Value'].values))
-                merged = pd.Series(nvals)
-                mdf = merged.to_frame('Neighborhood')
+                nvals = auto[auto['city_code']==cc]['Value'].values
+                merged = pd.Series(nvals).drop_duplicates()
+                mdf = merged.to_frame('Neighborhood').reset_index(drop=True)
                 mdf['city_code'] = cc
                 dfs.append(mdf)
         df = pd.concat(dfs, axis=0)
@@ -1263,6 +1263,9 @@ def read_neighborhood_city_file(path=work_david, file='neighborhood_city_code_co
     df = df[['city_code', 'City', 'neighborhood_code', 'Neighborhood']]
     # fix *:
     df['City'] = df['City'].str.replace('*', '')
+    df['City'] = df['City'].str.replace('נוף הגליל', 'נצרת עילית')
+    df['Neighborhood'] = df['Neighborhood'].str.replace('א טור', 'א-טור')
+    df['Neighborhood'] = df['Neighborhood'].str.replace('א רם', 'א-רם')
     df = df.dropna()
     return df
 
@@ -1276,7 +1279,7 @@ def neighborhoods_auto_complete_for_all_cities(path=work_david):
         df = auto_complete_neighborhoods_for_one_city(cities, path=path,
                                                       city_code=city_code)
         dfs.append(df)
-        sleep_between(0.1, 0.15)
+        sleep_between(0.2, 0.35)
     df = pd.concat(dfs, axis=0)
     return df
 
@@ -1323,7 +1326,7 @@ def process_one_page_from_neighborhoods_search(result_page):
         if full_addr != '' and disp_addr != '':
             body = produce_nadlan_rest_request(*full_addr.split(','),
                                                just_neighborhoods=False)
-            sleep_between(0.05, 0.1)
+            sleep_between(0.25, 0.35)
             df_extra = parse_body_request_to_dataframe(body)
             df.loc[i, 'ObjectID':'Street'] = df_extra.T[0]
         else:
@@ -1342,7 +1345,7 @@ def process_one_page_from_neighborhoods_search(result_page):
                 df_address = get_address_using_PARCEL_ID(parcel_id)
                 df.at[i, 'FULLADRESS'] = df_address['FULLADRESS']
                 df.at[i, 'Street'] = df_address['Street']
-                sleep_between(0.05, 0.1)
+                sleep_between(0.25, 0.35)
                 df.at[i, 'DescLayerID'] = 'ADDR_V1_recovered'
             except ValueError:
                 print('No address found for {}.'.format(row['GUSH']))
@@ -1351,7 +1354,7 @@ def process_one_page_from_neighborhoods_search(result_page):
         if has_historic:
             try:
                 result = post_nadlan_historic_deals(keyvalue)
-                sleep_between(0.05, 0.1)
+                sleep_between(0.25, 0.35)
             except TypeError:
                 continue
             df_historic = parse_one_json_nadlan_page_to_pandas(result, historic=True)
