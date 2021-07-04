@@ -976,6 +976,21 @@ def post_nadlan_rest(body):
     return result
 
 
+def post_nadlan_sviva_rest(body, only_neighborhoods=True):
+    """take body from request and post to nadlan.gov.il deals REST API,
+    Sviva=other parameters, demographics, etc"""
+    import requests
+    if only_neighborhoods:
+        if body['DescLayerID'] != 'NEIGHBORHOODS_AREA':
+            raise ValueError('DescLayerID is {}.. only NEIGHBORHOODS_AREA allowed.'.format(body['DescLayerID']))
+    url = 'https://www.nadlan.gov.il/Nadlan.REST//Mwa/GetPreInfo?subjects=127&pointBuffer=1500'
+    r = requests.post(url, json=body)
+    if r.status_code != 200:
+        raise ValueError('couldnt get a response ({}).'.format(r.status_code))
+    result = r.json()
+    return result
+
+
 def parse_body_request_to_dataframe(body):
     """parse body request to pandas"""
     import pandas as pd
@@ -1523,4 +1538,50 @@ def process_all_pages_for_nadlan_neighborhood_search(savepath, city_ndf,
             city_code, neighborhood_code, yrmin, yrmax)
         df.to_csv(savepath/filename, na_rep='None', index=False)
         print('{} was saved to {}.'.format(filename, savepath))
+    return df
+
+
+def parse_floorno(path=work_david):
+    import pandas as pd
+    from text_to_num import alpha2digit
+    import pandas as pd
+    df = pd.read_csv(path/'floors_df_parsing.csv')
+    df['en'] = df['en'].str.replace('Watch', 'Second')
+    df['en'] = df['en'].str.replace('quarter', 'fourth')
+    df['en'] = df['en'].str.replace('Second', '2')
+    df['en'] = df['en'].str.replace('second', '2')
+    df['en'] = df['en'].str.replace('First', '1')
+    df['en'] = df['en'].str.replace('first', '1')
+    df['en'] = df['en'].str.replace('land', 'ground')
+    df['en'] = df['en'].str.replace('Land', 'ground')
+    df['en'] = df['en'].str.replace('Ground', 'ground')
+    df['en'] = df['en'].str.replace('foremost', '1')
+    df['en'] = df['en'].str.replace('Third', '3')
+    df['en'] = df['en'].str.replace('third', '3')
+    df['en'] = df['en'].str.replace('floor', '')
+    df['en'] = df['en'].str.replace('Floor', '')
+    df['en'] = df['en'].str.replace('number', '')
+    df['en'] = df['en'].str.replace('A', '1')
+    df['en'] = df['en'].str.replace('B', '2')
+    df['en'] = df['en'].str.replace('C', '3')
+    df['en'] = df['en'].str.replace('D', '4')
+    df['en'] = df['en'].str.replace("'", '')
+    df['en'] = df['en'].str.replace(".", '')
+    df['en'] = df['en'].str.replace("the", '')
+    df['en'] = df['en'].str.replace("-", '')
+    df['en'] = df['en'].str.replace("God", '5')
+    df['en'] = df['en'].str.replace("heads", '1')
+    df['en'] = df['en'].str.replace("Twentytwo", '22')
+    df['en'] = df['en'].str.replace("Twentythree", '23')
+    df['en'] = df['en'].str.replace("Twentyfive", '25')
+    df['en'] = df['en'].str.replace('2asement', 'basement')
+    df['try1'] = df['en'].apply(alpha2digit, lang='en')
+    df['try1'] = df['try1'].str.replace('th', '')
+    df['try1'] = df['try1'].str.replace('rd', '')
+    df['FLOORNO'] = pd.to_numeric(df[df['try1'].str.isdigit()]['try1'])
+    df['More_floors_1'] = df[df['FLOORNO'].isnull()]['try1'].str.extract(r'(\d{1,1})')
+    df['More_floors_2'] = df[df['FLOORNO'].isnull()]['try1'].str.extract(r'(\d{2,3})')
+    df['Roof'] = df['try1'].str.contains('roof')
+    df['Ground'] = df['try1'].str.contains('ground')
+    df['Basement'] = df['try1'].str.contains('basement')
     return df
