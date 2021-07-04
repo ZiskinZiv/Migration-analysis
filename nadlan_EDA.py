@@ -64,6 +64,8 @@ def load_nadlan_deals(path=work_david, csv=True,
     if fix_new_status:
         inds = df.loc[(df['Age'] < 0) & (df['Age'] > -5)].index
         df.loc[inds, 'New'] = True
+        df['NEWPROJECTTEXT'] = pd.to_numeric(df['NEWPROJECTTEXT']).fillna(0)
+        df['NEWPROJECTTEXT'] = df['NEWPROJECTTEXT'].astype(bool)
     if add_SEI2_cluster:
         SEI_cluster = [x+1 for x in range(10)]
         new = [SEI_cluster[i:i+2] for i in range(0, len(SEI_cluster), 2)]
@@ -122,6 +124,7 @@ def keep_only_historic_changed_assets(df):
 
 
 def create_neighborhood_polygons(gdf):
+    """ an attempt to muild neighborhoods polygons from asset points"""
     import numpy as np
     gdf = gdf.reset_index()
     neis = gdf['Neighborhood'].unique()
