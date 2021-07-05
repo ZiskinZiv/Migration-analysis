@@ -1281,6 +1281,7 @@ def read_neighborhood_city_file(path=work_david, file='neighborhood_city_code_co
     df['City'] = df['City'].str.replace('נוף הגליל', 'נצרת עילית')
     df['Neighborhood'] = df['Neighborhood'].str.replace('א טור', 'א-טור')
     df['Neighborhood'] = df['Neighborhood'].str.replace('א רם', 'א-רם')
+    df['Neighborhood'] = df['Neighborhood'].str.replace("\\", " ")
     df = df.dropna()
     return df
 
