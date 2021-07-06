@@ -288,7 +288,7 @@ def recover_neighborhood_for_df(df_all):
     city = df_all['City'].unique()[0]
     df = df_all[df_all['Neighborhood'].isnull()]
     if df.empty:
-        return pd.DataFrame()
+        return df_all
     df['lot'] = [x[0] for x in df['GUSH'].str.split('-')]
     df['parcel'] = [x[1] for x in df['GUSH'].str.split('-')]
     groups = df.groupby(['lot', 'parcel']).groups
@@ -310,7 +310,7 @@ def recover_neighborhood_for_df(df_all):
         df.loc[inds, 'Neighborhood'] = df_neigh['Neighborhood'].item()
         df.loc[inds, 'Neighborhood_code'] = df_neigh['Neighborhood_code'].item()
         df.loc[inds, 'Neighborhood_id'] = df_neigh['Neighborhood_id'].item()
-        sleep_between(0.05, 0.1)
+        sleep_between(0.3, 0.35)
     print('Recovered {} Neighborhoods out of {} total no streets records.'.format(
         cnt, total))
     df_all.loc[df.index, 'Neighborhood'] = df['Neighborhood']
@@ -1297,6 +1297,12 @@ def read_neighborhood_city_file(path=work_david, file='neighborhood_city_code_co
     df['Neighborhood'] = df['Neighborhood'].str.replace('2004', 'שכונה 2004')
     df['Neighborhood'] = df['Neighborhood'].str.replace('קריית בן צבי-רסקו', 'קרית בן צבירסקו')
     df['Neighborhood'] = df['Neighborhood'].str.replace('/', '')
+    df['Neighborhood'] = df['Neighborhood'].str.replace('נאות שקמה', 'נאות שיקמה')
+    # fix beer-sheva:
+    ns=["יא","ט","ו","ה","ד","ג","ב","א"]
+    for n in ns:
+        ind = df.query('city_code==9000 & Neighborhood=="{}"'.format(n)).index
+        df.loc[ind, 'Neighborhood'] = "שכונה" + " {}".format(n) + "'"
     df = df.dropna()
     return df
 
@@ -1557,14 +1563,95 @@ def process_all_pages_for_nadlan_neighborhood_search(savepath, city_ndf,
     return df
 
 
-def neighborhood_validation_ndf(ndf, nX, nY):
+def neighborhhod_validation_and_recovery(city_path, nidf, gush_gdf=None,
+                                         city_code=3000, neighborhood_code=1,
+                                         nn_choice='nadlan', radius=3500):
+    import numpy as np
+    from Migration_main import path_glob
+    import pandas as pd
+    files = path_glob(
+            city_path, 'Nadlan_deals_city_{}_neighborhood_*.csv'.format(city_code))
+    n_hoods = [int(x.as_posix().split('/')[-1].split('_')[-2]) for x in files]
+    print('neighborhood number available: {}'.format(n_hoods))
+    hood_dict = dict(zip(n_hoods, files))
+    file = hood_dict.get(neighborhood_code, 'None')
+    df = pd.read_csv(file, na_values='None')
+    city_nidf = nidf[nidf['city_code'] == city_code]
+    city = city_nidf['City'].value_counts().index[0]
+    neighborhood = city_nidf.set_index(
+        'neighborhood_code').loc[neighborhood_code]['Neighborhood']
+    print('validating {} ({}) neighborhood.'.format(neighborhood, neighborhood_code))
+    body = produce_nadlan_rest_request(
+        city=city, street=neighborhood, just_neighborhoods=True)
+    nX = body['X']
+    nY = body['Y']
+    sleep_between(0.3, 0.35)
+    inds = df[df['X'] == 0].index
+    df.loc[inds, 'X'] = np.nan
+    df.loc[inds, 'X'] = np.nan
+    # first try and fill in X, Ys:
+    if gush_gdf is not None:
+        print('Using GUSH shape file to fill in X, Y:')
+        ndf_recovered = recover_XY_using_gush_parcel_shape_file(df, gush_gdf, desc='ADDR_V1_recovered')
+        ndf_recovered = recover_XY_using_gush_parcel_shape_file(df, gush_gdf, desc='XY_recovered')
+        ndf_recovered = recover_XY_using_gush_parcel_shape_file(df, gush_gdf, desc='NaN')
+    else:
+        ndf_recovered = df
+    # then check for govmap.il for neighborhoods using X,Y:
+    ndf_recovered = recover_neighborhood_for_df(ndf_recovered)
+    # then, check for neighborhoods value counts and see if it is equal to what
+    # is listed in read_neighborhood_city_file:
+    # TODO: this fails check why:
+    recovered_n = ndf_recovered['Neighborhood'].dropna().value_counts().index[0]
+    print(recovered_n, neighborhood)
+    try:
+        assert recovered_n == neighborhood
+    except AssertionError:
+        print('Neighborhood from Nadlan.gov.il: {}.'.format(neighborhood))
+        print('Neighborhood from govmap.il: {}.'.format(recovered_n))
+        print('I chose {}.'.format(nn_choice))
+        pass
+    if nn_choice == 'nadlan':
+        ndf_recovered.loc[:, 'Neighborhood'] = neighborhood
+    elif nn_choice == 'govmap':
+        ndf_recovered.loc[:, 'Neighborhood'] = recovered_n
+    # Then, filter deals that do not fall in this neighborhood:
+    ndf_recovered = neighborhood_gis_validation_ndf(ndf_recovered, nX, nY, gush_gdf, radius)
+    bad = ndf_recovered[ndf_recovered['distance_from_neighborhood_center']>radius]
+    if not bad.empty:
+        n_bad = bad['distance_from_neighborhood_center'].dropna().size
+        n_all = ndf_recovered['distance_from_neighborhood_center'].dropna().size
+        print('found {} deals out of {} outside of neighborhood ({} meters).'.format(n_bad, n_all, radius))
+        ndf_recovered = ndf_recovered[ndf_recovered['distance_from_neighborhood_center']<=radius]
+        if n_bad < 5:
+            return ndf_recovered
+        else:
+            raise ValueError
+    else:
+        return ndf_recovered
+
+
+def neighborhood_gis_validation_ndf(ndf, nX, nY, gush_gdf=None, radius=3500):
     """validate the neighborhood using neighborhood coords and calculate distance."""
     import geopandas as gpd
     from shapely.geometry import Point
     n_point = Point(nX, nY)
-    gdf = gpd.GeoDataFrame(ndf.copy(), geometry=gpd.points_from_xy(ndf['X'], ndf['Y']))
+    gdf = gpd.GeoDataFrame(
+        ndf.copy(), geometry=gpd.points_from_xy(ndf['X'], ndf['Y']))
     inds = gdf[~gdf['X'].isnull()].index
-    gdf.loc[inds, 'distance_from_neighborhood_center'] = gdf.loc[inds].geometry.distance(n_point)
+    gdf.loc[inds, 'distance_from_neighborhood_center'] = gdf.loc[inds].geometry.distance(
+        n_point)
+    bad = gdf[gdf['distance_from_neighborhood_center'] > radius]
+    if not bad.empty:
+        n_bad = bad['distance_from_neighborhood_center'].dropna().size
+        print('found {} deals outside of neighborhood ({} meters).'.format(n_bad, radius))
+        print('trying to re-find XY...')
+        gdf = recover_XY_using_gush_parcel_shape_file(
+            gdf, gush_gdf, desc='ADDR_V1')
+        gdf = gpd.GeoDataFrame(
+            gdf, geometry=gpd.points_from_xy(gdf['X'], gdf['Y']))
+        gdf.loc[inds, 'distance_from_neighborhood_center'] = gdf.loc[inds].geometry.distance(
+            n_point)
     return gdf
 
 
@@ -1585,36 +1672,8 @@ def validate_neighborhood_and_coords_for_all_city(city_path, path=work_david,
     dfs = []
     for hood_num, n_file in zip(n_hoods, files):
         hood_num = int(hood_num)
-        neighborhood = city_nidf.set_index(
-            'neighborhood_code').loc[hood_num]['Neighborhood']
-        print('validating {} ({}) neighborhood.'.format(neighborhood, hood_num))
-        body = produce_nadlan_rest_request(
-            city=city, street=neighborhood, just_neighborhoods=True)
-        nX = body['X']
-        nY = body['Y']
-        sleep_between(0.3, 0.35)
-        ndf = pd.read_csv(n_file, na_values='None')
-        inds = ndf[ndf['X'] == 0].index
-        ndf.loc[inds, 'X'] = np.nan
-        ndf.loc[inds, 'X'] = np.nan
-        # first try and fill in X, Ys:
-        if gush_gdf is not None:
-            print('Using GUSH shape file to fill in X, Y:')
-            ndf_recovered = recover_XY_using_gush_parcel_shape_file(ndf, gush_gdf, desc='ADDR_V1_recovered')
-            ndf_recovered = recover_XY_using_gush_parcel_shape_file(ndf, gush_gdf, desc='XY_recovered')
-            ndf_recovered = recover_XY_using_gush_parcel_shape_file(ndf, gush_gdf, desc='NaN')
-        else:
-            ndf_recovered = ndf
-        # then check for govmap.il for neighborhoods using X,Y:
-        ndf_recovered = recover_neighborhood_for_df(ndf_recovered)
-        # then, check for neighborhoods value counts and see if it is equal to what
-        # is listed in read_neighborhood_city_file:
-        # TODO: this fails check why:
-        recovered_n = ndf_recovered['Neighborhood'].dropna().value_counts().index[0]
-        assert recovered_n == neighborhood
-        ndf_recovered.loc[:, 'Neighborhood'] = neighborhood
-        # Then, filter deals that do not fall in this neighborhood:
-        ndf_recovered = neighborhood_validation_ndf(ndf_recovered, nX, nY)
+        ndf_recovered = neighborhhod_validation_and_recovery(
+            city_path, nidf, gush_gdf=gush_gdf, city_code=city_code, neighborhood_code=hood_num)
         dfs.append(ndf_recovered)
     return dfs
 
