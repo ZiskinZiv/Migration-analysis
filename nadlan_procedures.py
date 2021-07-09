@@ -1298,11 +1298,60 @@ def read_neighborhood_city_file(path=work_david, file='neighborhood_city_code_co
     df['Neighborhood'] = df['Neighborhood'].str.replace('קריית בן צבי-רסקו', 'קרית בן צבירסקו')
     df['Neighborhood'] = df['Neighborhood'].str.replace('/', '')
     df['Neighborhood'] = df['Neighborhood'].str.replace('נאות שקמה', 'נאות שיקמה')
-    # fix beer-sheva:
-    ns=["יא","ט","ו","ה","ד","ג","ב","א"]
-    for n in ns:
-        ind = df.query('city_code==9000 & Neighborhood=="{}"'.format(n)).index
-        df.loc[ind, 'Neighborhood'] = "שכונה" + " {}".format(n) + "'"
+    df['Neighborhood'] = df['Neighborhood'].str.replace("מב''ת צפון", "מבת צפון")
+    df['Neighborhood'] = df['Neighborhood'].str.replace('(', '')
+    df['Neighborhood'] = df['Neighborhood'].str.replace(')', '')
+    # # fix beer-sheva:
+    # ns=["יא","ט","ו","ה","ד","ג","ב","א"]
+    # for n in ns:
+    #     ind = df.query('city_code==9000 & Neighborhood=="{}"'.format(n)).index
+    #     df.loc[ind, 'Neighborhood'] = "שכונה" + " {}".format(n) + "'"
+    ind = df.query('city_code==3000 & neighborhood_code==123').index
+    df.loc[ind, 'Neighborhood'] = "עיר דוד"
+    ind = df.query('city_code==7100 & neighborhood_code==8').index
+    df.loc[ind, 'Neighborhood'] = "האגמים"
+    ind = df.query('city_code==7100 & neighborhood_code==33').index
+    df.loc[ind, 'Neighborhood'] = "נווה ים ד"
+    ind = df.query('city_code==7900 & neighborhood_code==50').index
+    df.loc[ind, 'Neighborhood'] = "נווה עוז הירוקה"
+    ind = df.query('city_code==8500 & neighborhood_code==12').index
+    df.loc[ind, 'Neighborhood'] = "נאות יצחק רבין"
+    ind = df.query('city_code==8500 & neighborhood_code==11').index
+    df.loc[ind, 'Neighborhood'] = "העיר העתיקה"
+    ind = df.query('city_code==8500 & neighborhood_code==28').index
+    df.loc[ind, 'Neighborhood'] = "העיר העתיקה מזרח"
+    ind = df.query('city_code==7800 & neighborhood_code==37').index
+    df.loc[ind, 'Neighborhood'] = "נווה אבות"
+    ind = df.query('city_code==7000 & neighborhood_code==30').index
+    df.loc[ind, 'Neighborhood'] = "ורדה הרכבת"
+    ind = df.query('city_code==7000 & neighborhood_code==31').index
+    df.loc[ind, 'Neighborhood'] = "שער העיר"
+    ind = df.query('city_code==2640 & neighborhood_code==24').index
+    df.loc[ind, 'Neighborhood'] = "אזור תעשיה ראש העין"
+    ind = df.query('city_code==2640 & neighborhood_code==28').index
+    df.loc[ind, 'Neighborhood'] = "פארק תעשיה אפק"
+    ind = df.query('city_code==1200 & neighborhood_code==15').index
+    df.loc[ind, 'Neighborhood'] = "מורשת תכנון בעתיד "
+    ind = df.query('city_code==1139 & neighborhood_code==20').index
+    df.loc[ind, 'Neighborhood'] = "רמיה"
+    ind = df.query('city_code==2630 & neighborhood_code==2').index
+    df.loc[ind, 'Neighborhood'] = "כרמי גת"
+    ind = df.query('city_code==2600 & neighborhood_code==15').index
+    df.loc[ind, 'Neighborhood'] = "יעלים"
+    ind = df.query('city_code==2560 & neighborhood_code==6').index
+    df.loc[ind, 'Neighborhood'] = "מרכז מסחרי ב"
+
+    # now add switch col:
+    df['switch'] = False
+    city_neigh_list = [
+        (6600, 16), (8300, 38), (70, 21), (70, 25), (3000, 29),
+        (3000, 18), (9000, 4), (9000, 7), (9000, 10), (9000, 12),
+        (9000, 13), (9000, 14), (9000, 16), (9000, 17), (9000, 11),
+        (7100, 9), (7100, 20),(7900, 12), (7900, 14), (7900, 30),
+        (8500, 11), (7700, 11), (7200, 30), (2100,10),(229, 10)]
+    for cc, nc in city_neigh_list:
+        ind = df.query('city_code=={} & neighborhood_code=={}'.format(cc, nc)).index
+        df.loc[ind, 'switch'] = True
     df = df.dropna()
     return df
 
@@ -1460,6 +1509,9 @@ def process_all_pages_for_nadlan_neighborhood_search(savepath, city_ndf,
     city = city_df['City'].unique()[0]
     neighborhood = city_df[city_df['neighborhood_code']
                            == neighborhood_code]['Neighborhood'].item()
+    city_neighborhood_switch = city_df[city_df['neighborhood_code']
+                           == neighborhood_code]['switch'].item()
+    print('switching city and neighborhood: {}'.format(city_neighborhood_switch))
     try:
         page_files = path_glob(
             savepath/'page_temp', 'Nadlan_deals_city_{}_neighborhood_{}_*.csv'.format(city_code, neighborhood_code))
@@ -1472,8 +1524,12 @@ def process_all_pages_for_nadlan_neighborhood_search(savepath, city_ndf,
         cnt = 1
         pass
     print('searching for {} neighborhood ({}) in {} ({}).'.format(neighborhood, neighborhood_code, city, city_code))
-    body = produce_nadlan_rest_request(
-        city, neighborhood, just_neighborhoods=True)
+    if city_neighborhood_switch:
+        body = produce_nadlan_rest_request(
+            neighborhood, city, just_neighborhoods=True)
+    else:
+        body = produce_nadlan_rest_request(
+            city, neighborhood, just_neighborhoods=True)
     body['PageNo'] = cnt
     page_dfs = []
     # cnt = 1
