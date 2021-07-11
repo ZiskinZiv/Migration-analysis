@@ -1038,20 +1038,36 @@ def post_nadlan_rest(body):
     return result
 
 
-def post_nadlan_sviva_rest(body, only_neighborhoods=True):
+def post_nadlan_sviva_rest(body, only_neighborhoods=True, subject=None):
     """take body from request and post to nadlan.gov.il deals REST API,
-    Sviva=other parameters, demographics, etc"""
+    Sviva=other parameters, demographics, etc,
+    subject 1: nadlan
+    subject 2: area services
+    subject 4: demography
+    subject 8: education
+    subject 16: environment
+    subject 32: greenarea
+    subject 64: transaccess
+    """
     import requests
     if only_neighborhoods:
         if body['DescLayerID'] != 'NEIGHBORHOODS_AREA':
-            raise ValueError('DescLayerID is {}.. only NEIGHBORHOODS_AREA allowed.'.format(body['DescLayerID']))
-    url = 'https://www.nadlan.gov.il/Nadlan.REST//Mwa/GetPreInfo?subjects=127&pointBuffer=1500'
+            raise ValueError('DescLayerID is {}.. only NEIGHBORHOODS_AREA allowed.'.format(
+                body['DescLayerID']))
+    if subject is not None:
+        url = 'https://www.nadlan.gov.il/Nadlan.REST//Mwa/GetDetails?subjects={}&pointBuffer=1500'.format(
+            subject)
+    else:
+        url = 'https://www.nadlan.gov.il/Nadlan.REST//Mwa/GetPreInfo?subjects=127&pointBuffer=1500'
     r = requests.post(url, json=body)
     if r.status_code != 200:
         raise ValueError('couldnt get a response ({}).'.format(r.status_code))
     result = r.json()
     return result
 
+
+def parse_neighborhood_sviva_post_result(result):
+    return df
 
 def parse_body_request_to_dataframe(body):
     """parse body request to pandas"""
@@ -1699,9 +1715,15 @@ def neighborhood_validation_and_recovery(df, nidf, gush_gdf=None, shuma_gdf=None
     city = city_nidf['City'].value_counts().index[0]
     neighborhood = city_nidf.set_index(
         'neighborhood_code').loc[neighborhood_code]['Neighborhood']
+    switch = city_nidf.set_index(
+        'neighborhood_code').loc[neighborhood_code]['switch']
     print('validating {} ({}) neighborhood.'.format(neighborhood, neighborhood_code))
-    body = produce_nadlan_rest_request(
-        city=city, street=neighborhood, just_neighborhoods=True)
+    if switch:
+        body = produce_nadlan_rest_request(
+            city=neighborhood, street=city, just_neighborhoods=True)
+    else:
+        body = produce_nadlan_rest_request(
+            city=city, street=neighborhood, just_neighborhoods=True)
     nX = body['X']
     nY = body['Y']
     sleep_between(0.3, 0.35)
