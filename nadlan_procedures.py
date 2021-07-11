@@ -178,9 +178,15 @@ def tries_requests_example():
 
     #         if len(inds) > 1:
 
-def load_gush_parcel_shape_file(path=work_david/'gis'):
+def load_gush_parcel_shape_file(path=work_david/'gis', shuma=False):
     import geopandas as gpd
-    gdf = gpd.read_file(
+    if shuma:
+        print('loading shuma gush parcel file...')
+        gdf = gpd.read_file(
+        work_david/'parcel_shuma_15-6-21.shp', encoding='cp1255')
+    else:
+        print('loading regular gush parcel file...')
+        gdf = gpd.read_file(
         work_david/'gis/PARCEL_ALL - Copy.shp', encoding='cp1255')
     return gdf
 
@@ -222,9 +228,14 @@ def recover_XY_using_gush_parcel_shape_file(df_all, gush_gdf, desc='SETL_MID_POI
             df_all.loc[inds, 'DescLayerID'] = 'XY_recovered_shape_gush_only'
             cnt_gush += 1
         else:
-            df_all.loc[inds, 'X'] = gdf.centroid.x.item()
-            df_all.loc[inds, 'Y'] = gdf.centroid.y.item()
-            df_all.loc[inds, 'DescLayerID'] = 'XY_recovered_shape'
+            if gdf.centroid.size > 1:
+                df_all.loc[inds, 'X'] = gdf.centroid.iloc[-1].x
+                df_all.loc[inds, 'Y'] = gdf.centroid.iloc[-1].y
+                df_all.loc[inds, 'DescLayerID'] = 'XY_recovered_shape_last'
+            else:
+                df_all.loc[inds, 'X'] = gdf.centroid.x.item()
+                df_all.loc[inds, 'Y'] = gdf.centroid.y.item()
+                df_all.loc[inds, 'DescLayerID'] = 'XY_recovered_shape'
             cnt_all += 1
     print('Recovered exact {} XYs and {} GUSH XYs out of {} total records.'.format(
         cnt_all, cnt_gush, total))
@@ -478,24 +489,69 @@ def get_address_using_PARCEL_ID(parcel_id='596179', return_first_address=True):
         return df
 
 
-def get_XY_coords_using_GUSH(GUSH='1533-149-12'):
+def recover_XY_using_govmap(df, desc='NaN', shuma=True):
+    import pandas as pd
+    df = df.copy().reset_index(drop=True)
+    city = df['City'].unique()[0]
+    if desc is not None:
+        if desc == 'NaN':
+            df = df[df['DescLayerID'].isnull()].copy()
+        else:
+            df = df[df['DescLayerID'] == desc].copy()
+    if df.empty:
+        print('No {} XYs were found in dataframe...'.format(desc))
+        return df
+    lots = [x[0] for x in df['GUSH'].str.split('-')]
+    parcels = [x[1] for x in df['GUSH'].str.split('-')]
+    df['lot'] = lots
+    df['parcel'] = parcels
+    groups = df.groupby(['lot', 'parcel']).groups
+    total = len(groups)
+    cnt_all = 0
+    print('Found {} deals with non recovered XY for city: {} and with DescLayerID of {}.'.format(total, city, desc))
+    # for i, (ind, row) in enumerate(df.iterrows()):
+    for i, ((lot, parcel), inds) in enumerate(groups.items()):
+        print('Fetching XY from GovMAP for {}-{} ({}/{}).'.format(lot, parcel, i+1, total))
+        x, y, parcel = get_XY_coords_using_GUSH('{}-{}'.format(lot, parcel), shuma=shuma)
+        sleep_between(0.3, 0.35)
+        df.loc[inds, 'X'] = x
+        df.loc[inds, 'Y'] = y
+        cnt_all += 1
+    print('Recovered exact {} XYs out of {} total records.'.format(
+        cnt_all, total))
+    return df
+
+
+def get_XY_coords_using_GUSH(GUSH='1533-149-12', shuma=False):
     import requests
     g = GUSH.split('-')
     lot = g[0]  # גוש
     parcel = g[1]  # חלקה
-    url = 'https://es.govmap.gov.il/TldSearch/api/DetailsByQuery?query=גוש {} חלקה {}&lyrs=262144&gid=govmap'.format(
-        lot, parcel)
+    if shuma:
+        url = 'https://es.govmap.gov.il/TldSearch/api/DetailsByQuery?query=גוש שומה {} חלקה {}&lyrs=32768&gid=govmap'.format(
+            lot, parcel)
+    else:
+        url = 'https://es.govmap.gov.il/TldSearch/api/DetailsByQuery?query=גוש {} חלקה {}&lyrs=262144&gid=govmap'.format(
+            lot, parcel)
     r = requests.get(url)
     rdict = r.json()
     if rdict['ErrorMsg'] is not None:
         raise ValueError('could not find coords for {}: {}'.format(
             GUSH, rdict['ErrorMsg']))
     else:
-        assert rdict['data']['GOVMAP_PARCEL_ALL'][0]['AData']['GUSH_NUM'] == lot
-        assert rdict['data']['GOVMAP_PARCEL_ALL'][0]['AData']['PARCEL'] == parcel
-        X = rdict['data']['GOVMAP_PARCEL_ALL'][0]['X']
-        Y = rdict['data']['GOVMAP_PARCEL_ALL'][0]['Y']
-        parcel_id = rdict['data']['GOVMAP_PARCEL_ALL'][0]['ObjectID']
+        if shuma:
+            assert rdict['data']['PARCEL_ALL_SHUMA'][0]['AData']['GUSH_NUM'] == lot
+            assert rdict['data']['PARCEL_ALL_SHUMA'][0]['AData']['PARCEL'] == parcel
+            X = rdict['data']['PARCEL_ALL_SHUMA'][0]['X']
+            Y = rdict['data']['PARCEL_ALL_SHUMA'][0]['Y']
+            parcel_id = rdict['data']['PARCEL_ALL_SHUMA'][0]['ObjectID']
+            print('SHUMA lot/parcel!')
+        else:
+            assert rdict['data']['GOVMAP_PARCEL_ALL'][0]['AData']['GUSH_NUM'] == lot
+            assert rdict['data']['GOVMAP_PARCEL_ALL'][0]['AData']['PARCEL'] == parcel
+            X = rdict['data']['GOVMAP_PARCEL_ALL'][0]['X']
+            Y = rdict['data']['GOVMAP_PARCEL_ALL'][0]['Y']
+            parcel_id = rdict['data']['GOVMAP_PARCEL_ALL'][0]['ObjectID']
         print('succsesfully recoverd X, Y for {}'.format(GUSH))
     # if get_address_too:
     #     df = get_address_using_PARCEL_ID(parcel_id)
@@ -1332,8 +1388,8 @@ def read_neighborhood_city_file(path=work_david, file='neighborhood_city_code_co
     df.loc[ind, 'Neighborhood'] = "פארק תעשיה אפק"
     ind = df.query('city_code==1200 & neighborhood_code==15').index
     df.loc[ind, 'Neighborhood'] = "מורשת תכנון בעתיד "
-    ind = df.query('city_code==1139 & neighborhood_code==20').index
-    df.loc[ind, 'Neighborhood'] = "רמיה"
+    # ind = df.query('city_code==1139 & neighborhood_code==20').index
+    # df.loc[ind, 'Neighborhood'] = "רמיה"
     ind = df.query('city_code==2630 & neighborhood_code==2').index
     df.loc[ind, 'Neighborhood'] = "כרמי גת"
     ind = df.query('city_code==2600 & neighborhood_code==15').index
@@ -1619,19 +1675,26 @@ def process_all_pages_for_nadlan_neighborhood_search(savepath, city_ndf,
     return df
 
 
-def neighborhhod_validation_and_recovery(city_path, nidf, gush_gdf=None,
+def neighborhood_validation_and_recovery(df, nidf, gush_gdf=None, shuma_gdf=None,
                                          city_code=3000, neighborhood_code=1,
                                          nn_choice='nadlan', radius=3500):
     import numpy as np
-    from Migration_main import path_glob
-    import pandas as pd
-    files = path_glob(
-            city_path, 'Nadlan_deals_city_{}_neighborhood_*.csv'.format(city_code))
-    n_hoods = [int(x.as_posix().split('/')[-1].split('_')[-2]) for x in files]
-    print('neighborhood number available: {}'.format(n_hoods))
-    hood_dict = dict(zip(n_hoods, files))
-    file = hood_dict.get(neighborhood_code, 'None')
-    df = pd.read_csv(file, na_values='None')
+    from cbs_procedures import read_bycode_city_data
+    # from Migration_main import path_glob
+    # import pandas as pd
+    # files = path_glob(
+    #         city_path, 'Nadlan_deals_city_{}_neighborhood_*.csv'.format(city_code))
+    # n_hoods = [int(x.as_posix().split('/')[-1].split('_')[-2]) for x in files]
+    # print('neighborhood number available: {}'.format(n_hoods))
+    # hood_dict = dict(zip(n_hoods, files))
+    # file = hood_dict.get(neighborhood_code, 'None')
+    # df = pd.read_csv(file, na_values='None')
+    # fill in district and city names:
+    bdf = read_bycode_city_data()
+    city_name = bdf.loc[city_code]['NameHe']
+    region = bdf.loc[city_code]['region']
+    df['District'] = 'מחוז {}'.format(region)
+    df['City'] = df['City'].fillna(city_name)
     city_nidf = nidf[nidf['city_code'] == city_code]
     city = city_nidf['City'].value_counts().index[0]
     neighborhood = city_nidf.set_index(
@@ -1651,15 +1714,18 @@ def neighborhhod_validation_and_recovery(city_path, nidf, gush_gdf=None,
         ndf_recovered = recover_XY_using_gush_parcel_shape_file(df, gush_gdf, desc='ADDR_V1_recovered')
         ndf_recovered = recover_XY_using_gush_parcel_shape_file(df, gush_gdf, desc='XY_recovered')
         ndf_recovered = recover_XY_using_gush_parcel_shape_file(df, gush_gdf, desc='NaN')
+    if shuma_gdf is not None:
+        print('Using SHUMA GUSH shape file to fill in X, Y:')
+        ndf_recovered = recover_XY_using_gush_parcel_shape_file(df, shuma_gdf, desc='ADDR_V1_recovered')
+        ndf_recovered = recover_XY_using_gush_parcel_shape_file(df, shuma_gdf, desc='XY_recovered')
+        ndf_recovered = recover_XY_using_gush_parcel_shape_file(df, shuma_gdf, desc='NaN')
     else:
-        ndf_recovered = df
+        ndf_recovered = recover_XY_using_govmap(df, shuma=False)
     # then check for govmap.il for neighborhoods using X,Y:
     ndf_recovered = recover_neighborhood_for_df(ndf_recovered)
     # then, check for neighborhoods value counts and see if it is equal to what
     # is listed in read_neighborhood_city_file:
-    # TODO: this fails check why:
     recovered_n = ndf_recovered['Neighborhood'].dropna().value_counts().index[0]
-    print(recovered_n, neighborhood)
     try:
         assert recovered_n == neighborhood
     except AssertionError:
@@ -1672,7 +1738,7 @@ def neighborhhod_validation_and_recovery(city_path, nidf, gush_gdf=None,
     elif nn_choice == 'govmap':
         ndf_recovered.loc[:, 'Neighborhood'] = recovered_n
     # Then, filter deals that do not fall in this neighborhood:
-    ndf_recovered = neighborhood_gis_validation_ndf(ndf_recovered, nX, nY, gush_gdf, radius)
+    ndf_recovered = neighborhood_gis_validation_ndf(ndf_recovered, nX, nY, gush_gdf, shuma_gdf, radius)
     bad = ndf_recovered[ndf_recovered['distance_from_neighborhood_center']>radius]
     if not bad.empty:
         n_bad = bad['distance_from_neighborhood_center'].dropna().size
@@ -1682,12 +1748,14 @@ def neighborhhod_validation_and_recovery(city_path, nidf, gush_gdf=None,
         if n_bad < 5:
             return ndf_recovered
         else:
+            bad.to_csv(work_david/'bad_neighborhood_{}_{}.csv'.format(city_code, neighborhood_code), na_rep='None', index=False)
             raise ValueError
     else:
         return ndf_recovered
 
 
-def neighborhood_gis_validation_ndf(ndf, nX, nY, gush_gdf=None, radius=3500):
+def neighborhood_gis_validation_ndf(ndf, nX, nY, gush_gdf=None, shuma_gdf=None,
+                                    radius=3500):
     """validate the neighborhood using neighborhood coords and calculate distance."""
     import geopandas as gpd
     from shapely.geometry import Point
@@ -1704,6 +1772,8 @@ def neighborhood_gis_validation_ndf(ndf, nX, nY, gush_gdf=None, radius=3500):
         print('trying to re-find XY...')
         gdf = recover_XY_using_gush_parcel_shape_file(
             gdf, gush_gdf, desc='ADDR_V1')
+        gdf = recover_XY_using_gush_parcel_shape_file(
+            gdf, shuma_gdf, desc='ADDR_V1')
         gdf = gpd.GeoDataFrame(
             gdf, geometry=gpd.points_from_xy(gdf['X'], gdf['Y']))
         gdf.loc[inds, 'distance_from_neighborhood_center'] = gdf.loc[inds].geometry.distance(
@@ -1711,27 +1781,93 @@ def neighborhood_gis_validation_ndf(ndf, nX, nY, gush_gdf=None, radius=3500):
     return gdf
 
 
-def validate_neighborhood_and_coords_for_all_city(city_path, path=work_david,
-                                                  city_code=3000, gush_gdf=None):
+def validate_neighborhood_and_coords_for_entire_city(city_path, nidf, path=work_david,
+                                                     city_code=3000, gush_gdf=None,
+                                                     shuma_gdf=None,
+                                                     nn_choice='nadlan', radius=3500):
     from Migration_main import path_glob
     import pandas as pd
-    import numpy as np
     # fill in city and district:
 
     files = sorted(path_glob(
         city_path, 'Nadlan_deals_city_{}_neighborhood_*.csv'.format(city_code)))
-    nidf = read_neighborhood_city_file(path=path)
+    # nidf = read_neighborhood_city_file(path=path)
+    pfiles = path_glob(
+        city_path, 'Nadlan_deals_city_{}_processed_neighborhood_*.csv'.format(city_code), return_empty_list=True)
+    if pfiles:
+        n_phoods = [x.as_posix().split('/')[-1].split('_')[6] for x in pfiles]
+        n_phoods = [int(x) for x in n_phoods]
+    else:
+        n_phoods = []
     city_nidf = nidf[nidf['city_code'] == city_code]
     n_hoods = [x.as_posix().split('/')[-1].split('_')[-2] for x in files]
     city = city_nidf['City'].value_counts().index[0]
     print('validating {} with {} neighborhoods.'.format(city, len(files)))
-    dfs = []
     for hood_num, n_file in zip(n_hoods, files):
         hood_num = int(hood_num)
-        ndf_recovered = neighborhhod_validation_and_recovery(
-            city_path, nidf, gush_gdf=gush_gdf, city_code=city_code, neighborhood_code=hood_num)
-        dfs.append(ndf_recovered)
-    return dfs
+        if hood_num in n_phoods:
+            print('neighborhood {} of {} already processed, skipping...'.format(hood_num, city))
+            continue
+        ndf = pd.read_csv(n_file, na_values='None')
+        ndf_recovered = neighborhood_validation_and_recovery(
+            ndf, nidf, gush_gdf=gush_gdf, shuma_gdf=shuma_gdf, city_code=city_code,
+            neighborhood_code=hood_num, nn_choice=nn_choice, radius=radius)
+        prefix = n_file.as_posix().split('/')[-1].split('_')[0:4] + ['processed']
+        suffix = n_file.as_posix().split('/')[-1].split('_')[-1]
+        filename = prefix + ['neighborhood', str(hood_num), nn_choice, str(radius)] + [suffix]
+        filename = '_'.join(filename)
+        ndf_recovered.to_csv(city_path/filename, na_rep='None', index=False)
+    print('Done!')
+    return
+
+
+def validate_neighborhood_and_coords_for_all_cities(main_path=work_david/'Nadlan_deals_by_neighborhood',
+                                                    gush_gdf=None,
+                                                    shuma_gdf=None,
+                                                    nn_choice='nadlan',
+                                                    radius=3500):
+    from Migration_main import path_glob
+    folder_paths = sorted(path_glob(main_path, '*/'))
+    city_codes = [x.as_posix().split('/')[-1].split('_')[0] for x in folder_paths]
+    city_codes = [int(x) for x in city_codes]
+    nidf = read_neighborhood_city_file()
+    for city_path, city_code in zip(folder_paths, city_codes):
+        print('validating city code {}.'.format(city_code))
+        validate_neighborhood_and_coords_for_entire_city(city_path, nidf,
+                                                         city_code=city_code,
+                                                         gush_gdf=gush_gdf,
+                                                         shuma_gdf=shuma_gdf,
+                                                         nn_choice=nn_choice,
+                                                         radius=radius)
+    print('DONE all cities!')
+    return
+
+
+def concat_validated_neighborhoods_for_all_cities(main_path=work_david/'Nadlan_deals_by_neighborhood'):
+    from Migration_main import path_glob
+    import pandas as pd
+    import os
+    full_cities = main_path / 'Nadlan_full_cities'
+    if not full_cities.is_dir():
+        os.mkdir(full_cities)
+        print('{} was created.'.format(full_cities))
+    folder_paths = sorted(path_glob(main_path, '*/'))
+    city_codes = [x.as_posix().split('/')[-1].split('_')[0]
+                  for x in folder_paths]
+    city_codes = [int(x) for x in city_codes]
+    for city_path, city_code in zip(folder_paths, city_codes):
+        print('concatenating city code {}.'.format(city_code))
+        files = path_glob(
+            city_path, 'Nadlan_deals_city_{}_processed_neighborhood_*.csv'.format(city_code), return_empty_list=True)
+        dfs = [pd.read_csv(x, na_values='None') for x in files]
+        df = pd.concat(dfs)
+        cols = df.loc[:, 'Neighborhood':'Street'].columns
+        df = df.drop_duplicates(subset=df.columns.difference(cols))
+        filename = 'Nadlan_deals_city_{}_all_neighborhoods_recovered.csv'.format(city_code)
+        df.to_csv(full_cities/filename, na_rep='None', index=False)
+        print('{} was saved to {}.'.format(filename, full_cities))
+    print('DONE all cities!')
+    return
 
 
 def parse_floorno(path=work_david):
