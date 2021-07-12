@@ -183,7 +183,7 @@ def load_gush_parcel_shape_file(path=work_david/'gis', shuma=False):
     if shuma:
         print('loading shuma gush parcel file...')
         gdf = gpd.read_file(
-        work_david/'parcel_shuma_15-6-21.shp', encoding='cp1255')
+        path/'parcel_shuma_15-6-21.shp', encoding='cp1255')
     else:
         print('loading regular gush parcel file...')
         gdf = gpd.read_file(
