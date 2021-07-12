@@ -28,7 +28,7 @@ nadlan_path = work_david / 'Nadlan_deals'
 apts = ['דירה', 'דירה בבית קומות']
 
 intel_kiryat_gat = [31.599645, 34.785265]
-
+bad_gush = ['1240-43']
 
 def transform_lat_lon_point_to_new_israel(lat, lon):
     from pyproj import Transformer
@@ -1128,7 +1128,53 @@ def parse_neighborhood_sviva_post_result(result):
     green['GREEN_AREA_SUM'] = result['GreenArea']['greenAreaSum']
     green = green.add_prefix('NEIG_')
     s = s.append(green)
+    s.index = s.index.str.replace('_W_', '_F_')
+    nadlan = pd.Series(dtype='float')
+    nadlan['1stHAND_CNT'] = result['Indexes']['firstHand']
+    nadlan['2stHAND_CNT'] = result['Indexes']['secondHand']
+    nadlan['3-ROOM_MED'] = result['Indexes']['threeRoomMedian']
+    nadlan['4-ROOM_MED'] = result['Indexes']['fourRoomMedian']
+    nadlan['5-ROOM_MED'] = result['Indexes']['fiveRoomMedian']
+    nadlan['MED'] = result['Indexes']['medianAmount']['MEDIANAMOUNTNEIGHBORHOOD']
+    nadlan['MED_GROUP'] = result['Indexes']['medianAmount']['MEDIANAMOUNTGROUP']
+    nadlan['YEARLY_YIELD_MED_PCT'] = result['Indexes']['MedianTsuaShnatit']
+    nadlan['M2_MED'] = result['Indexes']['squareMeterMedian']
+    nadlan['MED_5YEAR_PCT_CHANGE'] = result['Indexes']['medianChangePercent']['MEDIANCHANGEPERCENT1']
+    nadlan['MED_RENT'] = result['Indexes']['medianRentsAmount']['MEDIANAMOUNTNEIGHBORHOOD']
+    nadlan['M2_MED_RENT'] = result['Indexes']['medianRentsSqrMrAmount']['MEDIANAMOUNTNEIGHBORHOOD']
+    if result['Indexes']['MedianTsuaShnatitRoomNum']:
+        for item in result['Indexes']['MedianTsuaShnatitRoomNum']:
+            room = int(item['ROOMNUM'])
+            nadlan['{}-ROOM_RENT_MED'.format(room)] = item['MEDIANRENTNEIGHBORHOOD']
+            nadlan['{}-ROOM_YEARLY_YIELD_MED_PCT'.format(room)] = item['TSUASHNATIT']
+    nadlan = nadlan.add_prefix('NEIG_')
+    nadlan['SETL_MED'] = result['Indexes']['medianAmount']['MEDIANAMOUNTSETTLEMENT']
+    nadlan['SETL_MED_RENT'] = result['Indexes']['medianRentsAmount']['MEDIANAMOUNTSETTLEMENT']
+    nadlan['SETL_M2_MED_RENT'] = result['Indexes']['medianRentsSqrMrAmount']['MEDIANAMOUNTSETTLEMENT']
+    nadlan['NATIONAL_M2_MED_RENT'] = result['Indexes']['medianRentsSqrMrAmount']['MEDIANAMOUNTNATIONAL']
+    nadlan['NATIONAL_MED_RENT'] = result['Indexes']['medianRentsAmount']['MEDIANAMOUNTNATIONAL']
+    nadlan['NATIONAL_MED'] = result['Indexes']['medianAmount']['MEDIANAMOUNTNATIONAL']
+    nadlan['NATIONAL_MED_5YEAR_PCT_CHANGE'] = result['Indexes']['medianChangePercent']['MEDIANCHANGEPERCENTNATIONAL']
+    s = s.append(nadlan)
+    # add data year to differnt sections:
+    df = pd.DataFrame(result['dataLayer'])
+    s['DATA_YEAR_DEMOGRAPHY'] = df[df['SECTION_NAME'].str.contains('דמוגרפיה')]['DATA_YEAR'].values[0]
+    s['DATA_YEAR_NADLAN'] = df[df['SECTION_NAME'].str.contains('נדל"ן')]['DATA_YEAR'].values[0]
+    s['DATA_YEAR_EDUCATION'] = df[df['SECTION_NAME'].str.contains('חינוך')]['DATA_YEAR'].values[0]
+    s['DATA_YEAR_GREEN'] = df[df['SECTION_NAME'].str.contains('ירוקים')]['DATA_YEAR'].values[0]
+    s['DATA_YEAR_AREA_SERVICES'] = df[df['SECTION_NAME'].str.contains('מוסדות')]['DATA_YEAR'].values[0]
+    s['DATA_YEAR_ENVIRONMENT'] = df[df['SECTION_NAME'].str.contains('סביבה')]['DATA_YEAR'].values[0]
+    s['DATA_YEAR_TRANS_ACCESS'] = df[df['SECTION_NAME'].str.contains('תחבורה')]['DATA_YEAR'].values[0]
     return s
+
+
+def get_all_neighborhoods_sviva(path=work_david, savepath=work_david/'Neighborhoods_data'):
+    import os
+    if not savepath.is_dir():
+        os.mkdir(savepath)
+    df = read_neighborhood_city_file(path=path)
+    # for i, row in df.iterrows():
+    # TODO: continue this
 
 def parse_body_request_to_dataframe(body):
     """parse body request to pandas"""
@@ -1754,7 +1800,8 @@ def process_all_pages_for_nadlan_neighborhood_search(savepath, city_ndf,
 
 def neighborhood_validation_and_recovery(df, nidf, gush_gdf=None, shuma_gdf=None,
                                          city_code=3000, neighborhood_code=1,
-                                         nn_choice='nadlan', radius=3500):
+                                         nn_choice='nadlan', radius=3500,
+                                         bad_gush_list=None):
     import numpy as np
     from cbs_procedures import read_bycode_city_data
     # from Migration_main import path_glob
@@ -1821,7 +1868,9 @@ def neighborhood_validation_and_recovery(df, nidf, gush_gdf=None, shuma_gdf=None
     elif nn_choice == 'govmap':
         ndf_recovered.loc[:, 'Neighborhood'] = recovered_n
     # Then, filter deals that do not fall in this neighborhood:
-    ndf_recovered = neighborhood_gis_validation_ndf(ndf_recovered, nX, nY, gush_gdf, shuma_gdf, radius)
+    ndf_recovered = neighborhood_gis_validation_ndf(ndf_recovered, nX, nY, gush_gdf=gush_gdf,
+                                                    shuma_gdf=shuma_gdf, radius=radius,
+                                                    bad_gush_list=bad_gush_list)
     bad = ndf_recovered[ndf_recovered['distance_from_neighborhood_center']>radius]
     if not bad.empty:
         n_bad = bad['distance_from_neighborhood_center'].dropna().size
@@ -1838,9 +1887,10 @@ def neighborhood_validation_and_recovery(df, nidf, gush_gdf=None, shuma_gdf=None
 
 
 def neighborhood_gis_validation_ndf(ndf, nX, nY, gush_gdf=None, shuma_gdf=None,
-                                    radius=3500):
+                                    radius=3500, bad_gush_list=None):
     """validate the neighborhood using neighborhood coords and calculate distance."""
     import geopandas as gpd
+    import pandas as pd
     from shapely.geometry import Point
     n_point = Point(nX, nY)
     gdf = gpd.GeoDataFrame(
@@ -1861,13 +1911,27 @@ def neighborhood_gis_validation_ndf(ndf, nX, nY, gush_gdf=None, shuma_gdf=None,
             gdf, geometry=gpd.points_from_xy(gdf['X'], gdf['Y']))
         gdf.loc[inds, 'distance_from_neighborhood_center'] = gdf.loc[inds].geometry.distance(
             n_point)
+    if bad_gush_list is not None:
+        # exceptionalize bad gush numbers
+        lot = [x[0] for x in gdf['GUSH'].str.split('-')]
+        parcel = [x[1] for x in gdf['GUSH'].str.split('-')]
+        gush = [x + '-' + y for (x, y) in zip(lot, parcel)]
+        gush = pd.Series(gush)
+        gush.index = gdf.index
+        bad_inds = gush[gush.isin(bad_gush_list)].index
+        if not bad_inds.empty:
+            bad_found = gdf.loc[bad_inds, 'GUSH'].unique()
+            print('found bad gushs: {}'.format(len(bad_found)))
+            gdf.loc[bad_inds, 'distance_from_neighborhood_center'] = -1
+            gdf.loc[bad_inds, 'DescLayerID'] = 'bad_gush'
     return gdf
 
 
 def validate_neighborhood_and_coords_for_entire_city(city_path, nidf, path=work_david,
                                                      city_code=3000, gush_gdf=None,
                                                      shuma_gdf=None,
-                                                     nn_choice='nadlan', radius=3500):
+                                                     nn_choice='nadlan', radius=3500,
+                                                     bad_gush_list=bad_gush):
     from Migration_main import path_glob
     import pandas as pd
     # fill in city and district:
@@ -1894,7 +1958,7 @@ def validate_neighborhood_and_coords_for_entire_city(city_path, nidf, path=work_
         ndf = pd.read_csv(n_file, na_values='None')
         ndf_recovered = neighborhood_validation_and_recovery(
             ndf, nidf, gush_gdf=gush_gdf, shuma_gdf=shuma_gdf, city_code=city_code,
-            neighborhood_code=hood_num, nn_choice=nn_choice, radius=radius)
+            neighborhood_code=hood_num, nn_choice=nn_choice, radius=radius, bad_gush_list=bad_gush_list)
         prefix = n_file.as_posix().split('/')[-1].split('_')[0:4] + ['processed']
         suffix = n_file.as_posix().split('/')[-1].split('_')[-1]
         filename = prefix + ['neighborhood', str(hood_num), nn_choice, str(radius)] + [suffix]
@@ -1908,7 +1972,8 @@ def validate_neighborhood_and_coords_for_all_cities(main_path=work_david/'Nadlan
                                                     gush_gdf=None,
                                                     shuma_gdf=None,
                                                     nn_choice='nadlan',
-                                                    radius=3500):
+                                                    radius=3500,
+                                                    bad_gush_list=bad_gush):
     from Migration_main import path_glob
     folder_paths = sorted(path_glob(main_path, '*/'))
     city_codes = [x.as_posix().split('/')[-1].split('_')[0] for x in folder_paths]
@@ -1921,7 +1986,8 @@ def validate_neighborhood_and_coords_for_all_cities(main_path=work_david/'Nadlan
                                                          gush_gdf=gush_gdf,
                                                          shuma_gdf=shuma_gdf,
                                                          nn_choice=nn_choice,
-                                                         radius=radius)
+                                                         radius=radius,
+                                                         bad_gush_list=bad_gush_list)
     print('DONE all cities!')
     return
 
@@ -1931,13 +1997,13 @@ def concat_validated_neighborhoods_for_all_cities(main_path=work_david/'Nadlan_d
     import pandas as pd
     import os
     full_cities = main_path / 'Nadlan_full_cities'
-    if not full_cities.is_dir():
-        os.mkdir(full_cities)
-        print('{} was created.'.format(full_cities))
     folder_paths = sorted(path_glob(main_path, '*/'))
     city_codes = [x.as_posix().split('/')[-1].split('_')[0]
                   for x in folder_paths]
     city_codes = [int(x) for x in city_codes]
+    if not full_cities.is_dir():
+        os.mkdir(full_cities)
+        print('{} was created.'.format(full_cities))
     for city_path, city_code in zip(folder_paths, city_codes):
         print('concatenating city code {}.'.format(city_code))
         files = path_glob(
@@ -1946,6 +2012,7 @@ def concat_validated_neighborhoods_for_all_cities(main_path=work_david/'Nadlan_d
         df = pd.concat(dfs)
         cols = df.loc[:, 'Neighborhood':'Street'].columns
         df = df.drop_duplicates(subset=df.columns.difference(cols))
+        df['city_code'] = int(city_code)
         filename = 'Nadlan_deals_city_{}_all_neighborhoods_recovered.csv'.format(city_code)
         df.to_csv(full_cities/filename, na_rep='None', index=False)
         print('{} was saved to {}.'.format(filename, full_cities))
