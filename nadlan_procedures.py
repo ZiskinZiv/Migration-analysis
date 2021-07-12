@@ -1038,7 +1038,8 @@ def post_nadlan_rest(body):
     return result
 
 
-def post_nadlan_sviva_rest(body, only_neighborhoods=True, subject=None):
+def post_nadlan_sviva_rest(body, only_neighborhoods=True, subject=None,
+                           add_coords=True):
     """take body from request and post to nadlan.gov.il deals REST API,
     Sviva=other parameters, demographics, etc,
     subject 1: nadlan
@@ -1063,11 +1064,71 @@ def post_nadlan_sviva_rest(body, only_neighborhoods=True, subject=None):
     if r.status_code != 200:
         raise ValueError('couldnt get a response ({}).'.format(r.status_code))
     result = r.json()
+    if add_coords:
+        result['X'] = body['X']
+        result['Y'] = body['Y']
     return result
 
 
 def parse_neighborhood_sviva_post_result(result):
-    return df
+    import pandas as pd
+    # first parse demography:
+    neigh = pd.Series(result['Demography']['NeighborhoodsDemography'])
+    neigh = neigh.drop(['FNAME', 'OBJECTID', 'SETL_CODE', 'SETL_NAME'])
+    neigh['NAMEHE'] = result['rep']['nDesc']
+    neigh['X'] = result['X']
+    neigh['Y'] = result['Y']
+    if result['Demography']['NeighborhoodsAreaMigzar'] is not None:
+        migzar = pd.Series(result['Demography']['NeighborhoodsAreaMigzar'])
+        migzar = migzar.drop(['FCODE', 'FNAME', 'FNAME_SEC', 'LAST_EDITED', 'OBJECTID',
+                              'ORIG_AREA', 'PARENT', 'SETL_CODE', 'SETL_NAME', 'SETL_NAME_ARAB',
+                              'SETL_NAME_LTN', 'UNIQ_ID'])
+        neigh = neigh.append(migzar)
+    neigh = neigh.add_prefix('NEIG_')
+    setl = pd.Series(result['Demography']['settlementAcademics'])
+    setl['AVG_POP'] = result['Demography']['settlementAvgPopulation']
+    setl = setl.append(pd.Series(result['Demography']['settlementAvgSallary']))
+    setl = setl.append(pd.Series(result['Demography']['settlementChildAvg']))
+    setl = setl.append(pd.Series(result['Demography']['settlementDemography']))
+    setl.index = setl.index.str.replace('SETL_', '')
+    setl=setl.drop_duplicates()
+    setl=setl.drop('OBJECTID')
+    setl=setl.add_prefix('SETL_')
+    s = pd.concat([setl, neigh])
+    edu = pd.Series(dtype='float')
+    edu['KIDS_GAN_CNT'] = result['Education']['piGeoResult']['mwgKidsGanAllCount']
+    edu['MATNASIM_CNT'] = result['Education']['piGeoResult']['mwgMatnasimCount']
+    edu['SCHOOL_CNT'] = result['Education']['piGeoResult']['mwgSchoolsCount']
+    edu['AVE_SCHOOL_DISTANCE'] = result['Education']['piAlphaRsuelt']['AVE_DISTANCE']
+    edu = edu.add_prefix('NEIG_')
+    s = s.append(edu)
+    env = pd.Series(dtype='float')
+    env['CELL_TOWER_CNT'] = result['Environment']['cellActiveGeoCount']
+    env['AIR_STN_CNT'] = result['Environment']['SvivaGeoCount']
+    env = env.add_prefix('NEIG_')
+    s = s.append(env)
+    area_srv = pd.Series(dtype='float')
+    area_srv['STORES_CNT'] = result['AreaServices']['piGeoResult']['mwgStoresPointsCount']
+    area_srv['PUBLIC_BLD_CNT'] = result['AreaServices']['piGeoResult']['mwgMosdotTziburCount']
+    area_srv['RELIGION_BLD_CNT'] = result['AreaServices']['piGeoResult']['mwgReligionPointsCount']
+    area_srv['AVE_PUBLIC_BLD_DISTANCE'] = result['AreaServices']['piAlphaRsuelt']['mwgNeighborhoodsStoresAvgDistance']
+    area_srv = area_srv.add_prefix('NEIG_')
+    s = s.append(area_srv)
+    trans = pd.Series(dtype='float')
+    trans['BUS_STOP_CNT'] = result['TransAccess']['piGeoResult']['busStopsCount']
+    trans['BUS_ROUTES_CNT'] = result['TransAccess']['piGeoResult']['busStopsRoutesCount']
+    trans['PARKING_LOT_CNT'] = result['TransAccess']['piGeoResult']['mwgParkingPlotsCount']
+    trans['AVE_BUS_STOP_DISTANCE'] = result['TransAccess']['piAlphaRsuelt']['avgDistanceCount']
+    trans = trans.add_prefix('NEIG_')
+    s = s.append(trans)
+    green = pd.Series(dtype='float')
+    green['AVE_GREEN_AREA_DISTANCE'] = result['GreenArea']['greenAreaAveDistance']
+    green['AVE_NATURAL_GREEN_AREA_DISTANCE'] = result['GreenArea']['naturalGreenAreaAveDistance']
+    green['GREEN_AREA_CNT'] = result['GreenArea']['greenAreaCount']
+    green['GREEN_AREA_SUM'] = result['GreenArea']['greenAreaSum']
+    green = green.add_prefix('NEIG_')
+    s = s.append(green)
+    return s
 
 def parse_body_request_to_dataframe(body):
     """parse body request to pandas"""
