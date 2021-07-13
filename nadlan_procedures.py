@@ -16,6 +16,15 @@ NEW SEARCH and PROCESS (search by NEIGHBORHOODs):
 4) now search for historic deals if TREND_FORMAT != ''
 
 
+    COMbining Neighborhood and cities dataset:
+        apperentely there were X, Y = 0 so i did the following:
+            inds=df[df['Y']==0].index
+            df.loc[inds,'DescLayerID']=np.nan
+            inds=df[df['X']==0].index
+            df.loc[inds,'DescLayerID']=np.nan
+            gdf=load_gush_parcel_shape_file()
+            df=recover_XY_using_gush_parcel_shape_file(df, gush_gdf=gdf,desc='NaN')
+
 @author: ziskin
 """
 # TODO: each call to body with street name yields district, city and street
@@ -2018,6 +2027,179 @@ def concat_validated_neighborhoods_for_all_cities(main_path=work_david/'Nadlan_d
         print('{} was saved to {}.'.format(filename, full_cities))
     print('DONE all cities!')
     return
+
+
+def combine_both_nadlan_datasets(neighborhood_path=work_david/'Nadlan_deals_by_neighborhood',
+                                 cities_path=work_david/'Nadlan_deals',
+                                 savepath=work_david, drop_dup_using='KEYVALUE'):
+    import pandas as pd
+    from Migration_main import path_glob
+    n_path = neighborhood_path / 'Nadlan_full_cities'
+    c_path = cities_path / 'Nadlan_full_cities'
+    # first load the cities search nadalan dataset:
+    print('reading cities dataset...')
+    files = path_glob(c_path, 'Nadlan_deals_city_*_all_streets_*.csv')
+    dtypes = {'FULLADRESS': 'object', 'Street': 'object', 'FLOORNO': 'object',
+              'NEWPROJECTTEXT': 'object', 'PROJECTNAME': 'object'}
+    dfs = [pd.read_csv(file, na_values='None', parse_dates=['DEALDATETIME'],
+                       dtype=dtypes) for file in files]
+    dfc = pd.concat(dfs, axis=0)
+    dfc = dfc.drop(['Unnamed: 0', 'Unnamed: 0.1'], axis=1)
+    # now load neighborhood data:
+    print('reading neighborhood dataset...')
+    files = path_glob(
+        n_path, 'Nadlan_deals_city_*_all_neighborhoods_recovered.csv')
+    dfs = [pd.read_csv(file, na_values='None', parse_dates=['DEALDATETIME'],
+                       dtype=dtypes) for file in files]
+    dfn = pd.concat(dfs, axis=0)
+    dfn = dfn.drop(['DEALDATE', 'DISPLAYADRESS', 'distance_from_neighborhood_center',
+                    'geometry'], axis=1)
+    print('combining them.. and saving...')
+    df = pd.concat([dfn, dfc], axis=0)
+    df = df.reset_index(drop=True)
+    print('Dropping duplicates using {}.'.format(drop_dup_using))
+    df = df.drop_duplicates(subset=drop_dup_using)
+    df = df.reset_index(drop=True)
+    if savepath is not None:
+        yrmin = df['DEALDATETIME'].min().year
+        yrmax = df['DEALDATETIME'].max().year
+        filename = 'Nadlan_deals_neighborhood_combined_{}-{}.csv'.format(
+            yrmin, yrmax)
+        df.to_csv(savepath/filename, na_rep='None', index=False)
+        print('{} was saved to {}.'.format(filename, savepath))
+    return df
+
+
+def process_combined_nadlan_deals_and_save(df, savepath=work_david):
+    """adding different indices, statistical code, etc...
+    but first you need to fill in the missing X, Y from shape file.
+    see docstrings at top of this file"""
+    from cbs_procedures import read_statistical_areas_gis_file
+    from cbs_procedures import read_social_economic_index
+    from cbs_procedures import read_periphery_index
+    from cbs_procedures import read_bycode_city_data
+    import geopandas as gpd
+    import numpy as np
+    import pandas as pd
+    print('adding statistics...')
+    df = df.reset_index(drop=True)
+    # now convert to geodataframe using X and Y:
+    df = gpd.GeoDataFrame(df, geometry=gpd.points_from_xy(df['X'], df['Y']))
+    df.crs = {'init': 'epsg:2039'}
+    # now try to add CBS statistical areas for each address coords:
+    stats = read_statistical_areas_gis_file()
+    # stats = stats[stats['city_code'] == df['city_code'].iloc[0]]
+    # so iterate over stats geodataframe and check if asset coords are
+    # within the stat area polygon (also all population 2019):
+    # use the same loop to to input the social economic index from CBS:
+    SEI = read_social_economic_index()
+    # SEI = SEI[SEI['city_code'] == df['city_code'].iloc[0]]
+    for i, row in stats.iterrows():
+        city_code = row['city_code']
+        poly = row['geometry']
+        stat_code = row['stat11']
+        pop2019 = row['pop_total']
+        df_city = df[df['city_code']==city_code]
+        if df_city.empty:
+            print('{} settlement not found in deals, skipping...'.format(city_code))
+            continue
+        within = df_city.geometry.within(poly)
+        inds = within[within].index
+        if inds.empty:
+            print('no deals in {} area of city {}.'.format(stat_code, city_code))
+            continue
+        df.loc[inds, 'stat_code'] = stat_code
+        df.loc[inds, 'city_stat_code'] = row['city_stat11']
+        df.loc[inds, 'pop2019_total'] = pop2019
+        SEI_city = SEI[SEI['city_code']==city_code]
+        SEI_code = SEI_city[SEI_city['stat_code'] == stat_code]
+        # print(stat_code)
+        try:
+            df.loc[inds, 'SEI_value'] = SEI_code['index_value'].values[0]
+            df.loc[inds, 'SEI_rank'] = SEI_code['rank'].values[0]
+            df.loc[inds, 'SEI_cluster'] = SEI_code['cluster'].values[0]
+        except IndexError:
+            df.loc[inds, 'SEI_value'] = np.nan
+            df.loc[inds, 'SEI_rank'] = np.nan
+            df.loc[inds, 'SEI_cluster'] = np.nan
+    print('calculating more columns...')
+    # calculate squared meters per room:
+    df['M2_per_ROOM'] = df['DEALNATURE'] / df['ASSETROOMNUM']
+    df['NIS_per_M2'] = df['DEALAMOUNT'] / df['DEALNATURE']
+    df['Age'] = df['DEALDATETIME'].dt.year - df['BUILDINGYEAR']
+    # try to guess new buildings:
+    df['New'] = df['BUILDINGYEAR'] == df['DEALDATETIME'].dt.year
+    inds = df.loc[(df['Age'] < 0) & (df['Age'] > -5)].index
+    df.loc[inds, 'New'] = True
+    # another method of finding new first hand deals:
+    inds = df[df['NEWPROJECTTEXT']=='False'].index
+    df.loc[inds, 'NEWPROJECTTEXT'] = 0
+    inds = df[df['NEWPROJECTTEXT']=='True'].index
+    df.loc[inds, 'NEWPROJECTTEXT'] = 1
+    inds = df[df['NEWPROJECTTEXT']=='1.0'].index
+    df.loc[inds, 'NEWPROJECTTEXT'] = 1
+    inds = df[df['NEWPROJECTTEXT']=='1'].index
+    df.loc[inds, 'NEWPROJECTTEXT'] = 1
+    df['NEWPROJECTTEXT'] = pd.to_numeric(df['NEWPROJECTTEXT']).fillna(0)
+    df['NEWPROJECTTEXT'] = df['NEWPROJECTTEXT'].astype(bool)
+    # try to guess ground floors apts.:
+    df['Ground'] = df['FLOORNO'].str.contains('קרקע')
+    # add SEI2 cluster:
+    SEI_cluster = [x+1 for x in range(10)]
+    new = [SEI_cluster[i:i+2] for i in range(0, len(SEI_cluster), 2)]
+    SEI2 = {}
+    for i, item in enumerate(new):
+        SEI2[i+1] = new[i]
+        m = pd.Series(SEI2).explode().sort_values()
+        d = {x: y for (x, y) in zip(m.values, m.index)}
+        df['SEI2_cluster'] = df['SEI_cluster'].map(d)
+    # add peripheriy data:
+    pdf = read_periphery_index()
+    cols = ['TLV_proximity_value', 'TLV_proximity_rank', 'PAI_value',
+            'PAI_rank', 'P2015_value', 'P2015_rank', 'P2015_cluster']
+    dicts = [pdf[x].to_dict() for x in cols]
+    series = [df['city_code'].map(x) for x in dicts]
+    pdf1 = pd.concat(series, axis=1)
+    pdf1.columns = cols
+    df = pd.concat([df, pdf1], axis=1)
+    # add bycode data:
+    bdf = read_bycode_city_data()
+    cols = ['district', 'district_EN', 'region', 'natural_area']
+    dicts = [bdf[x].to_dict() for x in cols]
+    series = [df['city_code'].map(x) for x in dicts]
+    bdf1 = pd.concat(series, axis=1)
+    bdf1.columns = cols
+    df = pd.concat([df, bdf1], axis=1)
+    # add datetime attrs:
+    df['year'] = df['DEALDATETIME'].dt.year
+    df['month'] = df['DEALDATETIME'].dt.month
+    df['quarter'] = df['DEALDATETIME'].dt.quarter
+    df['YQ'] = df['year'].astype(str) + 'Q' + df['quarter'].astype(str)
+    # finally try to parse floor numbers:
+    floor_df = parse_floorno()
+    floor_dict = dict(zip(floor_df['he'].values, floor_df['FLOORNO'].values))
+    df['FLOORNO'] = df['FLOORNO'].map(floor_dict)
+    # fix some negiborhood issues:
+    df['Neighborhood']=df['Neighborhood'].str.replace('שכונת', '')
+    df['Neighborhood']=df['Neighborhood'].str.strip()
+    # try to fillin dealneaturedescription from agging the gush field
+    print('filling DEALNATUREDESCRIPTION using value_counts on GUSH_ONLY')
+    lot = [x[0] for x in df['GUSH'].str.split('-')]
+    parcel = [x[1] for x in df['GUSH'].str.split('-')]
+    gush = [x + '-' + y for (x, y) in zip(lot, parcel)]
+    df['GUSH_ONLY'] = gush
+    fill_dict = df.groupby(['GUSH_ONLY'])['DEALNATUREDESCRIPTION'].value_counts().unstack().idxmax(axis=1).to_dict()
+    df['DEALNATUREDESCRIPTION'] = df.groupby('GUSH_ONLY')['DEALNATUREDESCRIPTION'].fillna(df['GUSH_ONLY'].map(fill_dict))
+    df = df.reset_index(drop=True)
+    if savepath is not None:
+        yrmin = df['DEALDATETIME'].min().year
+        yrmax = df['DEALDATETIME'].max().year
+        filename = 'Nadlan_deals_neighborhood_combined_processed_{}-{}.csv'.format(
+            yrmin, yrmax)
+        print('saving...')
+        df.to_csv(savepath/filename, na_rep='None', index=False)
+        print('{} was saved to {}.'.format(filename, savepath))
+    return df
 
 
 def parse_floorno(path=work_david):
