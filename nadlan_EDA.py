@@ -8,13 +8,15 @@ Created on Fri Jun 18 08:32:19 2021
 from MA_paths import work_david
 nadlan_path = work_david / 'Nadlan_deals'
 apts = ['דירה', 'דירה בבית קומות']
+muni_path = work_david/'gis/muni_il'
 
 
 def create_higher_group_category(df, existing_col='SEI_cluster', n_groups=2,
                                  new_col='SEI2_cluster', names=None):
     import pandas as pd
     lower_group = sorted(df[existing_col].dropna().unique())
-    new_group = [lower_group[i:i+n_groups+1] for i in range(0, len(lower_group), n_groups+1)]
+    new_group = [lower_group[i:i+n_groups+1]
+                 for i in range(0, len(lower_group), n_groups+1)]
     new_dict = {}
     if names is not None:
         assert len(names) == len(new_group)
@@ -30,10 +32,11 @@ def create_higher_group_category(df, existing_col='SEI_cluster', n_groups=2,
 
 
 def load_nadlan_combined_deal(path=work_david, times=['1998Q1', '2021Q1'],
-                              dealamount_iqr=2, return_geo=False):
+                              dealamount_iqr=2, return_XY=False):
     import pandas as pd
     from Migration_main import path_glob
     import geopandas as gpd
+    import numpy as np
     file = path_glob(
         path, 'Nadlan_deals_neighborhood_combined_processed_*.csv')
     dtypes = {'FULLADRESS': 'object', 'Street': 'object', 'FLOORNO': float,
@@ -50,11 +53,15 @@ def load_nadlan_combined_deal(path=work_david, times=['1998Q1', '2021Q1'],
         print('Filtering DEALAMOUNT with IQR of  {}.'.format(dealamount_iqr))
         df = df[~df.groupby('year')['DEALAMOUNT'].apply(
             is_outlier, method='iqr', k=dealamount_iqr)]
-    if return_geo:
-        gdf = gpd.GeoDataFrame(df, geometry=gpd.points_from_xy(df['X'], df['Y']))
-        return gdf
-    else:
-        return df
+    df = df.reset_index(drop=True)
+    if return_XY:
+        inds = df[df['X'] == 0].index
+        df.loc[inds, 'X'] = np.nan
+        inds = df[df['Y'] == 0].index
+        df.loc[inds, 'Y'] = np.nan
+        df = gpd.GeoDataFrame(
+            df, geometry=gpd.points_from_xy(df['X'], df['Y']))
+    return df
 
 
 def load_nadlan_deals(path=work_david, csv=True,
@@ -123,6 +130,24 @@ def load_nadlan_deals(path=work_david, csv=True,
     return df
 
 
+def add_city_polygons_to_nadlan_df(df, muni_path=muni_path):
+    import geopandas as gpd
+    muni = load_muni_il(path=muni_path)
+    ccs = list(set(df['city_code']).intersection(set(muni['CR_LAMAS'])))
+    muni = muni[muni['CR_LAMAS'].isin(ccs)]
+    muni = muni.reset_index(drop=True)
+    df = df[df['city_code'].isin(ccs)]
+    df = df.drop('geometry', axis=1)
+    df = df.reset_index(drop=True)
+    # TODO: fix this:
+    for i, row in muni.iterrows():
+        cc = row['CR_LAMAS']
+        geo = row['geometry']
+        inds = df[df['city_code']==cc].index
+        df.loc[inds, 'geometry'] = [geo]*len(inds)
+    df = gpd.GeoDataFrame(df,geometry='geometry')
+    return df
+
 def is_outlier(s, k=3, method='std'):
     # add IQR
     if method == 'std':
@@ -159,7 +184,7 @@ def create_neighborhood_polygons(gdf):
     gdf['neighborhood_shape'] = gdf.geometry
     # Must be a geodataframe:
     for nei in neis:
-        gdf1 = gdf[gdf['Neighborhood']==nei]
+        gdf1 = gdf[gdf['Neighborhood'] == nei]
         inds = gdf1.index
         polygon = gdf1.geometry.unary_union.convex_hull
         # gdf.loc[inds, 'neighborhood_shape'] = [polygon for x in range(len(inds))]
@@ -194,12 +219,15 @@ def calculate_recurrent_times_and_pct_change(df, plot=True):
     df = df.sort_values('DEALDATETIME')
     dff = df.groupby('GUSH')['DEALAMOUNT'].count()
     dff2 = df[df['GUSH'].isin(dff[dff > 1].index)]
-    seconds_between_deals = dff2.groupby('GUSH')['DEALDATETIME'].diff().dt.total_seconds()
+    seconds_between_deals = dff2.groupby(
+        'GUSH')['DEALDATETIME'].diff().dt.total_seconds()
     deals_pct_change = dff2.groupby('GUSH')['DEALAMOUNT'].pct_change()
     df['years_between_deals'] = seconds_between_deals / 60 / 60 / 24 / 365.25
-    df['mean_years_between_deals'] = df.groupby('GUSH')['years_between_deals'].transform('mean')
+    df['mean_years_between_deals'] = df.groupby(
+        'GUSH')['years_between_deals'].transform('mean')
     df['deals_pct_change'] = deals_pct_change * 100
-    df['mean_deals_pct_change'] = df.groupby('GUSH')['deals_pct_change'].transform('mean')
+    df['mean_deals_pct_change'] = df.groupby(
+        'GUSH')['deals_pct_change'].transform('mean')
     # drop duplicated dt's:
     deals_inds_to_drop = deals_pct_change[deals_pct_change == 0].index
     seconds_inds_to_drop = seconds_between_deals[seconds_between_deals == 0].index
@@ -233,7 +261,7 @@ def plot_recurrent_deals(df, max_number_of_sells=6, rooms=[2, 3, 4, 5]):
         df = df.rename({'ASSETROOMNUM': 'Number of rooms'}, axis=1)
         df['Number of rooms'] = df['Number of rooms'].astype(int)
         df = df[df['DEALNATUREDESCRIPTION'].isin(apts)]
-        dff = df.groupby(['GUSH','Number of rooms'])['DEALAMOUNT'].count()
+        dff = df.groupby(['GUSH', 'Number of rooms'])['DEALAMOUNT'].count()
         dff = dff[dff <= 6]
         df1 = dff.groupby('Number of rooms').value_counts()
         f, ax = plt.subplots(figsize=(7, 7))
@@ -290,7 +318,7 @@ def plot_deal_amount_room_number(df, rooms=[2, 3, 4, 5],
     ax.tick_params(axis='x', rotation=30)
     ax.set_ylabel('Price [millions of NIS]')
     bycode = read_bycode_city_data()
-    city_name = bycode[bycode['city_code']==city_code]['NameEn'].values[0]
+    city_name = bycode[bycode['city_code'] == city_code]['NameEn'].values[0]
     fig.suptitle('Real-Estate prices in {}'.format(city_name))
     return ax
 
@@ -303,7 +331,8 @@ def plot_groupby_m2_price_time_series(df, grps=['City', 'Neighborhood'],
     groups = grps.copy()
     groups.append('year')
     dfn = df.groupby(groups, as_index=False)[col].mean().groupby('year').mean()
-    std = df.groupby(groups, as_index=False)[col].mean().groupby('year').std()[col].values
+    std = df.groupby(groups, as_index=False)[
+        col].mean().groupby('year').std()[col].values
     dfn['plus_std'] = dfn[col] + std
     dfn['minus_std'] = dfn[col] - std
     fig, ax = plt.subplots(figsize=(14, 5))
@@ -324,7 +353,8 @@ def plot_room_number_deals(df, rooms_range=[2, 6]):
     dff = df.groupby(['ASSETROOMNUM', 'year'])['DEALAMOUNT'].count()
     da = dff.to_xarray()
     dff = convert_da_to_long_form_df(da, value_name='Deals')
-    ax = sns.barplot(data=dff,x='year', y='Deals', hue='ASSETROOMNUM', palette='Set1')
+    ax = sns.barplot(data=dff, x='year', y='Deals',
+                     hue='ASSETROOMNUM', palette='Set1')
     ax.grid(True)
     return dff
 
@@ -364,7 +394,7 @@ def compare_kiryat_gat_israel_dealamount(df_kg, df_isr):
     df = df_kg / df_isr
     # df['price_diff'] = df['price_in_kg'] - df['price_in_israel']
     fig, ax = plt.subplots(figsize=(15.5, 6))
-    df1 = df #/ 1e6
+    df1 = df  # / 1e6
     df1.index = pd.to_datetime(df1.index)
     df1.plot(ax=ax, cmap=sns.color_palette("tab10", as_cmap=True))
     ax.set_ylabel('Price difference [million NIS]')
@@ -435,8 +465,9 @@ def bootstrap_df_by_year(df, grp='year', frac_deals=0.1, col='NIS_per_M2',
         df1 = df[df[grp] == year][col].dropna()
         # print(len(df1))
         # dff = bootstrap_df(df1, n_rep=n_replicas,
-                           # frac=frac_deals, n_sam=None, col=col, grp=None)
-        dff = pd.Series([df1.sample(n=None, frac=frac_deals, replace=True, random_state=None).mean() for i in range(n_replicas)])
+        # frac=frac_deals, n_sam=None, col=col, grp=None)
+        dff = pd.Series([df1.sample(n=None, frac=frac_deals, replace=True,
+                        random_state=None).mean() for i in range(n_replicas)])
         dff = dff.to_frame(year).reset_index(drop=True)
         dffs.append(dff)
     stats = pd.concat(dffs, axis=1).melt(var_name=grp, value_name=col)
@@ -461,6 +492,23 @@ def bootstrap_df_by_year(df, grp='year', frac_deals=0.1, col='NIS_per_M2',
 #     return stats
 
 
+def load_muni_il(path=work_david/'gis/muni_il', union=True):
+    import geopandas as gpd
+    import pandas as pd
+    muni = gpd.read_file(path/'muni_il.shp')
+    muni['CR_LAMAS'] = pd.to_numeric(muni['CR_LAMAS']).astype('Int64')
+    muni['CR_PNIM'] = pd.to_numeric(muni['CR_PNIM']).astype('Int64')
+    groups = muni.groupby('CR_LAMAS').groups
+    geo = []
+    ser = []
+    for i, (cc, inds) in enumerate(groups.items()):
+        ser.append(muni.loc[inds].iloc[0])
+        geo.append(muni.loc[inds].geometry.unary_union)
+    gdf = gpd.GeoDataFrame(ser, geometry=geo)
+    gdf['geometry'] = geo
+    return gdf
+
+
 def run_lag_analysis_boi_interest_nadlan(ndf, idf, i_col='effective', months=48):
     ndf = ndf.set_index('DEALDATETIME')
     ndf_mean = ndf['DEALAMOUNT'].resample('M').mean()
@@ -470,5 +518,3 @@ def run_lag_analysis_boi_interest_nadlan(ndf, idf, i_col='effective', months=48)
     for i in range(months):
         idf['{}_{}'.format(i_col, i+1)] = idf[i_col].shift(-i-1)
     return idf
-
-
