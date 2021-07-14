@@ -36,6 +36,7 @@ if platform.system() == 'Linux':
         work_david = work_path / 'David_migration'
         cwd = Path().cwd()
         geo_path = Path('/home/ziskin/')
+        savefig_path = Path().cwd()
         # geo_path = Path('/home/ziskin/geo_ariel_home/')
         # adams_path = Path('/home/ziskin/adams_home/')
         # data11_path = Path('/home/ziskin/data11/')
