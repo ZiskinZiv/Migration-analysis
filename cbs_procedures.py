@@ -27,6 +27,34 @@ def geo_location_settelments_israel(path=work_david):
     return df
 
 
+def read_mean_salary(path=work_david, resample='AS'):
+    import pandas as pd
+    df = pd.read_excel(path/'mean_salary_1990-2019_cbs_table.xls', skiprows=8)
+    df = df.drop(df.tail(5).index)
+    df.columns = ['year', 'to_drop', '12', '11', '10', '9', '8', '7',
+                  '6', '5', '4', '3', '2', '1', 'year_mean', 'to_drop1', 'to_drop2']
+    df = df[[x for x in df.columns if 'to_drop' not in x]]
+    df = df.loc[:, 'year':'1'].melt(
+        var_name='month', value_name='mean_salary1', id_vars='year')
+    df['dt'] = df['year'].astype(str) + '-' + df['month'].astype(str)
+    df['dt'] = pd.to_datetime(df['dt'], format='%Y-%m')
+    df = df.set_index('dt')
+    df = df.drop(['year', 'month'], axis=1)
+    df = df.sort_index()
+    df1 = pd.read_excel(path/'mean_salary_2012-2021_cbs.xlsx', skiprows=21)
+    df1 = df1.drop(df1.tail(3).index)
+    df1.columns = ['time', 'mean_salary2']
+    df1['dt'] = pd.to_datetime(df1['time'], format='%Y-%m')
+    df1 = df1.set_index('dt')
+    df1 = df1.drop('time', axis=1)
+    df = pd.concat([df,df1],axis=1)
+    df['mean_salary'] = df.mean(axis=1)
+    if resample is not None:
+        df = df.resample(resample).mean()
+    # df = df.drop('year', axis=1)
+    return df['mean_salary']
+
+
 def read_social_economic_index(path=work_david):
     import pandas as pd
     df = pd.read_excel(
