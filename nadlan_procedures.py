@@ -1060,6 +1060,8 @@ def post_nadlan_sviva_rest(body, only_neighborhoods=True, subject=None,
     subject 64: transaccess
     """
     import requests
+    import numpy as np
+    from requests.exceptions import ReadTimeout
     if only_neighborhoods:
         if body['DescLayerID'] != 'NEIGHBORHOODS_AREA':
             raise ValueError('DescLayerID is {}.. only NEIGHBORHOODS_AREA allowed.'.format(
@@ -1069,14 +1071,24 @@ def post_nadlan_sviva_rest(body, only_neighborhoods=True, subject=None,
             subject)
     else:
         url = 'https://www.nadlan.gov.il/Nadlan.REST//Mwa/GetPreInfo?subjects=127&pointBuffer=1500'
-    r = requests.post(url, json=body)
+    try:
+        r = requests.post(url, json=body, timeout=10)
+    except ReadTimeout:
+        raise ValueError('TimeOut')
     if r.status_code != 200:
         raise ValueError('couldnt get a response ({}).'.format(r.status_code))
     result = r.json()
-    if add_coords:
-        result['X'] = body['X']
-        result['Y'] = body['Y']
-    return result
+    if result is not None:
+        if add_coords:
+            try:
+                result['X'] = body['X']
+                result['Y'] = body['Y']
+            except TypeError:
+                result['X'] = np.nan
+                result['Y'] = np.nan
+        return result
+    else:
+        raise ValueError('no data')
 
 
 def parse_neighborhood_sviva_post_result(result):
@@ -1144,26 +1156,34 @@ def parse_neighborhood_sviva_post_result(result):
     nadlan['3-ROOM_MED'] = result['Indexes']['threeRoomMedian']
     nadlan['4-ROOM_MED'] = result['Indexes']['fourRoomMedian']
     nadlan['5-ROOM_MED'] = result['Indexes']['fiveRoomMedian']
-    nadlan['MED'] = result['Indexes']['medianAmount']['MEDIANAMOUNTNEIGHBORHOOD']
-    nadlan['MED_GROUP'] = result['Indexes']['medianAmount']['MEDIANAMOUNTGROUP']
     nadlan['YEARLY_YIELD_MED_PCT'] = result['Indexes']['MedianTsuaShnatit']
     nadlan['M2_MED'] = result['Indexes']['squareMeterMedian']
-    nadlan['MED_5YEAR_PCT_CHANGE'] = result['Indexes']['medianChangePercent']['MEDIANCHANGEPERCENT1']
-    nadlan['MED_RENT'] = result['Indexes']['medianRentsAmount']['MEDIANAMOUNTNEIGHBORHOOD']
-    nadlan['M2_MED_RENT'] = result['Indexes']['medianRentsSqrMrAmount']['MEDIANAMOUNTNEIGHBORHOOD']
+    med_change_pct = result['Indexes']['medianChangePercent']
+    nadlan = nadlan.add_prefix('NEIG_')
+    if med_change_pct is not None:
+        nadlan['NEIG_MED_5YEAR_PCT_CHANGE'] = med_change_pct['MEDIANCHANGEPERCENT1']
+        nadlan['NATIONAL_MED_5YEAR_PCT_CHANGE'] = med_change_pct['MEDIANCHANGEPERCENTNATIONAL']
+    med_rent_amount = result['Indexes']['medianRentsAmount']
+    if med_rent_amount is not None:
+        nadlan['NEIG_MED_RENT'] = med_rent_amount['MEDIANAMOUNTNEIGHBORHOOD']
+        nadlan['SETL_MED_RENT'] = med_rent_amount['MEDIANAMOUNTSETTLEMENT']
+        nadlan['NATIONAL_MED_RENT'] = med_rent_amount['MEDIANAMOUNTNATIONAL']
+    med_rent_m2_amount = result['Indexes']['medianRentsSqrMrAmount']
+    if med_rent_m2_amount is not None:
+        nadlan['NEIG_M2_MED_RENT'] = med_rent_m2_amount['MEDIANAMOUNTNEIGHBORHOOD']
+        nadlan['SETL_M2_MED_RENT'] = med_rent_m2_amount['MEDIANAMOUNTSETTLEMENT']
+        nadlan['NATIONAL_M2_MED_RENT'] = med_rent_m2_amount['MEDIANAMOUNTNATIONAL']
+    med_amount = result['Indexes']['medianAmount']
+    if med_amount is not None:
+        nadlan['NEIG_MED'] = result['Indexes']['medianAmount']['MEDIANAMOUNTNEIGHBORHOOD']
+        nadlan['NEIG_MED_GROUP'] = result['Indexes']['medianAmount']['MEDIANAMOUNTGROUP']
+        nadlan['SETL_MED'] = result['Indexes']['medianAmount']['MEDIANAMOUNTSETTLEMENT']
+        nadlan['NATIONAL_MED'] = result['Indexes']['medianAmount']['MEDIANAMOUNTNATIONAL']
     if result['Indexes']['MedianTsuaShnatitRoomNum']:
         for item in result['Indexes']['MedianTsuaShnatitRoomNum']:
             room = int(item['ROOMNUM'])
-            nadlan['{}-ROOM_RENT_MED'.format(room)] = item['MEDIANRENTNEIGHBORHOOD']
-            nadlan['{}-ROOM_YEARLY_YIELD_MED_PCT'.format(room)] = item['TSUASHNATIT']
-    nadlan = nadlan.add_prefix('NEIG_')
-    nadlan['SETL_MED'] = result['Indexes']['medianAmount']['MEDIANAMOUNTSETTLEMENT']
-    nadlan['SETL_MED_RENT'] = result['Indexes']['medianRentsAmount']['MEDIANAMOUNTSETTLEMENT']
-    nadlan['SETL_M2_MED_RENT'] = result['Indexes']['medianRentsSqrMrAmount']['MEDIANAMOUNTSETTLEMENT']
-    nadlan['NATIONAL_M2_MED_RENT'] = result['Indexes']['medianRentsSqrMrAmount']['MEDIANAMOUNTNATIONAL']
-    nadlan['NATIONAL_MED_RENT'] = result['Indexes']['medianRentsAmount']['MEDIANAMOUNTNATIONAL']
-    nadlan['NATIONAL_MED'] = result['Indexes']['medianAmount']['MEDIANAMOUNTNATIONAL']
-    nadlan['NATIONAL_MED_5YEAR_PCT_CHANGE'] = result['Indexes']['medianChangePercent']['MEDIANCHANGEPERCENTNATIONAL']
+            nadlan['NEIG_{}-ROOM_RENT_MED'.format(room)] = item['MEDIANRENTNEIGHBORHOOD']
+            nadlan['NEIG_{}-ROOM_YEARLY_YIELD_MED_PCT'.format(room)] = item['TSUASHNATIT']
     s = s.append(nadlan)
     # add data year to differnt sections:
     df = pd.DataFrame(result['dataLayer'])
@@ -1179,11 +1199,60 @@ def parse_neighborhood_sviva_post_result(result):
 
 def get_all_neighborhoods_sviva(path=work_david, savepath=work_david/'Neighborhoods_data'):
     import os
+    import pandas as pd
+    from Migration_main import path_glob
     if not savepath.is_dir():
         os.mkdir(savepath)
     df = read_neighborhood_city_file(path=path)
-    # for i, row in df.iterrows():
-    # TODO: continue this
+    ccs = [x for x in reversed([x for x in sorted(df['city_code'].unique())])]
+    files = path_glob(savepath, 'Nadlan_sviva_city_*.csv', return_empty_list=True)
+    cc_from_files = [x.as_posix().split('/')[-1].split('.')[0].split('_')[-1] for x in files]
+    cc_from_files = [x for x in reversed(sorted([int(x) for x in cc_from_files]))]
+    if cc_from_files:
+        last_cc = cc_from_files[-1]
+        ind = ccs.index(last_cc)
+        ccs = ccs[ind+1:]
+        print('last city found is {}, starting from {}.'.format(last_cc, ccs[ind]))
+    for cc in ccs:
+        dfs = []
+        df_city = df[df['city_code']==cc]
+        city = df_city['City'].unique().item()
+        print('getting sviva data for {} city ({}):'.format(city, cc))
+        for i, row in df_city.iterrows():
+            n_code = row['neighborhood_code']
+            neighborhood = row['Neighborhood']
+            print('getting sviva for neighborhood {}, ({})'.format(neighborhood, n_code))
+            switch = row['switch']
+            sleep_between(0.2, 0.3)
+            if switch:
+                try:
+                    body = produce_nadlan_rest_request(
+                        city=neighborhood, street=city, just_neighborhoods=True)
+                except TypeError as e:
+                    print(e)
+                continue
+            else:
+                try:
+                    body = produce_nadlan_rest_request(
+                        city=city, street=neighborhood, just_neighborhoods=True)
+                except TypeError as e:
+                    print(e)
+                    continue
+            try:
+                result = post_nadlan_sviva_rest(body)
+            except ValueError as e:
+                print(e)
+                continue
+            sleep_between(0.7, 0.9)
+            ser = parse_neighborhood_sviva_post_result(result)
+            dfs.append(ser)
+        dfn = pd.DataFrame(dfs)
+        filename = 'Nadlan_sviva_city_{}.csv'.format(cc)
+        dfn.to_csv(savepath/filename, na_rep='None', index=False)
+        print('{} was saved to {}.'.format(filename, savepath))
+    print('Done!')
+    return
+
 
 def parse_body_request_to_dataframe(body):
     """parse body request to pandas"""
