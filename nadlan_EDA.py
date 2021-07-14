@@ -29,6 +29,34 @@ def create_higher_group_category(df, existing_col='SEI_cluster', n_groups=2,
     return df
 
 
+def load_nadlan_combined_deal(path=work_david, times=['1998Q1', '2021Q1'],
+                              dealamount_iqr=2, return_geo=False):
+    import pandas as pd
+    from Migration_main import path_glob
+    import geopandas as gpd
+    file = path_glob(
+        path, 'Nadlan_deals_neighborhood_combined_processed_*.csv')
+    dtypes = {'FULLADRESS': 'object', 'Street': 'object', 'FLOORNO': float,
+              'NEWPROJECTTEXT': bool, 'PROJECTNAME': 'object', 'DEALAMOUNT': float}
+    df = pd.read_csv(file[0], na_values='None', parse_dates=['DEALDATETIME'],
+                     dtype=dtypes)
+    if times is not None:
+        print('Slicing to times {} to {}.'.format(*times))
+        # df = df[df['year'].isin(np.arange(years[0], years[1] + 1))]
+        df = df.set_index('DEALDATETIME')
+        df = df.loc[times[0]:times[1]]
+        df = df.reset_index()
+    if dealamount_iqr is not None:
+        print('Filtering DEALAMOUNT with IQR of  {}.'.format(dealamount_iqr))
+        df = df[~df.groupby('year')['DEALAMOUNT'].apply(
+            is_outlier, method='iqr', k=dealamount_iqr)]
+    if return_geo:
+        gdf = gpd.GeoDataFrame(df, geometry=gpd.points_from_xy(df['X'], df['Y']))
+        return gdf
+    else:
+        return df
+
+
 def load_nadlan_deals(path=work_david, csv=True,
                       times=['1998Q1', '2021Q1'], dealamount_iqr=2,
                       fix_new_status=True, add_SEI2_cluster=True,
@@ -192,6 +220,7 @@ def calculate_recurrent_times_and_pct_change(df, plot=True):
         return g
     else:
         return df
+
 
 def plot_recurrent_deals(df, max_number_of_sells=6, rooms=[2, 3, 4, 5]):
     import numpy as np
