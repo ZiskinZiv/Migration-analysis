@@ -5,12 +5,18 @@ Created on Fri Jul  2 15:41:04 2021
 
 @author: shlomi
 """
+from MA_paths import work_david
+ml_path = work_david / 'ML'
 features = ['ASSETROOMNUM', 'FLOORNO', 'DEALNATURE', 'NEWPROJECTTEXT',
             'BUILDINGYEAR', 'BUILDINGFLOORS', 'SEI_value', 'New', 'Ground',
-            'TLV_proximity_value', 'PAI_value', 'P2015_value', 'year']
+            'TLV_proximity_value', 'PAI_value', 'P2015_value', 'year','Building_Growth_Rate']
 
 features1 = ['FLOORNO', 'DEALNATURE', 'NEWPROJECTTEXT',
-            'BUILDINGYEAR',  'SEI_value', 'Ground', 'P2015_value', 'year']
+             'BUILDINGYEAR',  'SEI_value', 'Ground', 'P2015_value', 'year', 'Building_Growth_Rate']
+
+features2 = ['FLOORNO', 'DEALNATURE', 'NEWPROJECTTEXT',
+             'SEI_value', 'Ground', 'year', 'Building_Growth_Rate']
+
 
 
 def nadlan_simple_ML(df, year=2000, model_name='RF', feats=features1):
@@ -60,6 +66,51 @@ def cross_validation(X, y, model_name='RF', n_splits=5, pgrid='light',
     return gr
 
 
+def cross_validate_using_optimized_HP(X, y, estimator, model='RF', n_splits=5,
+                                      n_repeats=20, scorers=['r2']):
+    from sklearn.model_selection import cross_validate
+    from sklearn.model_selection import TimeSeriesSplit
+    from sklearn.model_selection import KFold
+    from sklearn.model_selection import RepeatedKFold
+    from sklearn.model_selection import LeaveOneGroupOut
+    from sklearn.model_selection import GroupShuffleSplit
+    # logo = LeaveOneGroupOut()
+    # gss = GroupShuffleSplit(n_splits=20, test_size=0.1, random_state=1)
+    # from sklearn.metrics import make_scorer
+    # X = produce_X()
+    # if add_MLR2:
+    #     X = add_enso2_and_enso_qbo_to_X(X)
+    #     print('adding ENSO^2 and ENSO*QBO')
+    # y = produce_y()
+    # X = X.sel(time=slice('1994', '2019'))
+    # y = y.sel(time=slice('1994', '2019'))
+    # groups = X['time'].dt.year
+    # scores_dict = {s: s for s in scorers}
+    # if 'r2_adj' in scorers:
+    #     scores_dict['r2_adj'] = make_scorer(r2_adj_score)
+    # if 'MLR' not in model:
+    #     hp_params = get_HP_params_from_optimized_model(path, model)
+    # ml = ML_Classifier_Switcher()
+    # ml_model = ml.pick_model(model_name=model)
+    # if 'MLR' not in model:
+    #     ml_model.set_params(**hp_params)
+    print(estimator)
+    # cv = TimeSeriesSplit(5)
+    # # cv = KFold(10, shuffle=True, random_state=1)
+    # cv = RepeatedKFold(n_splits=n_splits, n_repeats=n_repeats,
+    #                    random_state=1)
+    # if strategy == 'LOGO-year':
+    #     print('using LeaveOneGroupOut strategy.')
+    cvr = cross_validate(estimator, X, y, scoring=scorers, cv=n_splits)
+    # elif strategy == 'GSS-year':
+    #     print('using GroupShuffleSplit strategy.')
+    #     cvr = cross_validate(ml_model, X, y, scoring=scores_dict, cv=gss,
+    #                          groups=groups)
+    # else:
+    #     cvr = cross_validate(ml_model, X, y, scoring=scores_dict, cv=cv)
+    return cvr
+
+
 def save_gridsearchcv_object(GridSearchCV, savepath, filename):
     import joblib
     print('{} was saved to {}'.format(filename, savepath))
@@ -95,24 +146,54 @@ def manual_cross_validation_for_RF_feature_importances(X, y, rf_model,
     fi['repeats'] = np.arange(1, len(fis)+1)
     fi['regressor'] = X.columns
     fi.name = 'feature_importances'
+    fi = sort_fi(fi)
     return fi
 
 
+def sort_fi(fi):
+    fi_mean = fi.mean('repeats')
+    dff = fi_mean.to_dataframe().sort_values('feature_importances')
+    da = dff.to_xarray()['feature_importances']
+    fi = fi.sortby(da)
+    return fi
+
+
+def plot_feature_importances(fi):
+    import seaborn as sns
+    import matplotlib.pyplot as plt
+    from nadlan_EDA import convert_da_to_long_form_df
+    sns.set_theme(style='ticks', font_scale=1.5)
+    fig, ax = plt.subplots(figsize=(17, 5))
+    df = convert_da_to_long_form_df(fi, value_name='feature_importances')
+    df['feature_importances'] = df['feature_importances'] * 100
+    sns.barplot(data=df, x='feature_importances', y='regressor', ci='sd', ax=ax)
+    ax.grid(True)
+    ax.set_xlabel('Feature Importances [%]')
+    ax.set_ylabel('Regressors')
+    fig.suptitle('Year 2000')
+    fig.tight_layout()
+    return fig
+
+
 def get_HP_params_from_optimized_model(path, pgrid='light', year=2000,
-                                       model_name='RF', return_df=False):
+                                       model_name='RF', return_df=False, return_object=True):
     import joblib
     from Migration_main import path_glob
     files = path_glob(path, 'GRSRCHCV_{}_*_{}_{}.pkl'.format(model_name, pgrid, year))
     file = [x for x in files if model_name in x.as_posix()][0]
     gr = joblib.load(file)
-    df = read_one_gridsearchcv_object(gr)
+    if return_object:
+        df, gr = read_one_gridsearchcv_object(gr)
+        return df, gr
+    else:
+        df = read_one_gridsearchcv_object(gr)
     if return_df:
         return df
     else:
         return df.iloc[0][:-2].to_dict()
 
 
-def read_one_gridsearchcv_object(gr):
+def read_one_gridsearchcv_object(gr, return_object=True):
     """read one gridsearchcv multimetric object and
     get the best params, best mean/std scores"""
     import pandas as pd
@@ -139,7 +220,10 @@ def read_one_gridsearchcv_object(gr):
     best_df['mean_score'] = best_mean_scores
     best_df['std_score'] = best_std_scores
     best_df.index = scorers
-    return best_df
+    if return_object:
+        return best_df, gr
+    else:
+        return best_df
 
 
 # def process_gridsearch_results(GridSearchCV, model_name,
