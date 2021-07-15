@@ -1194,6 +1194,7 @@ def parse_neighborhood_sviva_post_result(result):
     s['DATA_YEAR_AREA_SERVICES'] = df[df['SECTION_NAME'].str.contains('מוסדות')]['DATA_YEAR'].values[0]
     s['DATA_YEAR_ENVIRONMENT'] = df[df['SECTION_NAME'].str.contains('סביבה')]['DATA_YEAR'].values[0]
     s['DATA_YEAR_TRANS_ACCESS'] = df[df['SECTION_NAME'].str.contains('תחבורה')]['DATA_YEAR'].values[0]
+    s = s[~s.index.duplicated(keep='first')]
     return s
 
 
@@ -1211,8 +1212,8 @@ def get_all_neighborhoods_sviva(path=work_david, savepath=work_david/'Neighborho
     if cc_from_files:
         last_cc = cc_from_files[-1]
         ind = ccs.index(last_cc)
-        ccs = ccs[ind+1:]
         print('last city found is {}, starting from {}.'.format(last_cc, ccs[ind]))
+        ccs = ccs[ind+1:]
     for cc in ccs:
         dfs = []
         df_city = df[df['city_code']==cc]
@@ -1246,12 +1247,37 @@ def get_all_neighborhoods_sviva(path=work_david, savepath=work_david/'Neighborho
             sleep_between(0.7, 0.9)
             ser = parse_neighborhood_sviva_post_result(result)
             dfs.append(ser)
-        dfn = pd.DataFrame(dfs)
+        if len(dfs) == 1:
+            dfn = pd.DataFrame(dfs[0]).T
+        else:
+            dfn = pd.DataFrame(dfs)
         filename = 'Nadlan_sviva_city_{}.csv'.format(cc)
         dfn.to_csv(savepath/filename, na_rep='None', index=False)
         print('{} was saved to {}.'.format(filename, savepath))
     print('Done!')
     return
+
+
+def concat_all_sviva_data(path=work_david, savepath=work_david/'Neighborhoods_data'):
+    import pandas as pd
+    from Migration_main import path_glob
+    from pandas.errors import EmptyDataError
+    files = path_glob(savepath, 'Nadlan_sviva_city_*.csv')
+    dfs = []
+    for file in files:
+        try:
+            df = pd.read_csv(file, na_values='None')
+        except EmptyDataError:
+            continue
+        df = df.drop_duplicates(subset='NEIG_UNIQ_ID')
+        dfs.append(df)
+    dff = pd.concat(dfs, axis=0)
+    dff = dff.sort_values('SETL_CODE')
+    dff = dff.reset_index(drop=True)
+    filename = 'Nadlan_neighborhoods_sviva_data.csv'
+    dff.to_csv(path/filename, na_rep='None', index=False)
+    print('{} was saved to {}.'.format(filename, savepath))
+    return dff
 
 
 def parse_body_request_to_dataframe(body):
