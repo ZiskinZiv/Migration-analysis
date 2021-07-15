@@ -32,11 +32,22 @@ def create_higher_group_category(df, existing_col='SEI_cluster', n_groups=2,
 
 
 def load_nadlan_combined_deal(path=work_david, times=['1998Q1', '2021Q1'],
-                              dealamount_iqr=2, return_XY=False):
+                              dealamount_iqr=2, return_XY=False, add_bgr='Total'):
     import pandas as pd
     from Migration_main import path_glob
     import geopandas as gpd
     import numpy as np
+
+    def add_bgr_func(grp, bgr, rooms='Total'):
+        import numpy as np
+        cc_as_str = str(grp['city_code'].unique()[0])
+        try:
+            gr = bgr.loc[cc_as_str][rooms]
+        except KeyError:
+            gr = np.nan
+        grp['Building_Growth_Rate'] = gr
+        return grp
+
     file = path_glob(
         path, 'Nadlan_deals_neighborhood_combined_processed_*.csv')
     dtypes = {'FULLADRESS': 'object', 'Street': 'object', 'FLOORNO': float,
@@ -61,6 +72,12 @@ def load_nadlan_combined_deal(path=work_david, times=['1998Q1', '2021Q1'],
         df.loc[inds, 'Y'] = np.nan
         df = gpd.GeoDataFrame(
             df, geometry=gpd.points_from_xy(df['X'], df['Y']))
+    if add_bgr is not None:
+        print('Adding Building Growth rate.')
+        file = path_glob(path, 'Building_*_growth_rate_*.csv')[0]
+        bgr = pd.read_csv(file, na_values='None', index_col='ID')
+        df = df.groupby('city_code').apply(add_bgr_func, bgr, rooms=add_bgr)
+        df.loc[df['Building_Growth_Rate'] == 0] = np.nan
     return df
 
 
