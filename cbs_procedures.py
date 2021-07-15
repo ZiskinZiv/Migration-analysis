@@ -161,6 +161,10 @@ def read_periphery_index(path=work_david):
 def read_building_starts_ends(path=work_david, filename='BuildingIL_1995-2000 (Shlomi).xlsx'):
     import pandas as pd
     df = pd.read_excel(path/filename, sheet_name='Raw')
+    df['ID'] = df['ID'].astype(str).str.replace('יו"ש', 'J&S')
+    df['ID'] = df['ID'].astype(str).str.replace('--', 'NRC')
+    df['ID'] = df['ID'].astype(str).str.replace('אחר', 'Other')
+    df.loc[:,'1room':'Total'] = df.loc[:,'1room':'Total'].astype(float)
     return df
 
 
@@ -180,6 +184,39 @@ def calculate_building_rates(bdf, phase='Begin', rooms='Total', fillna=True):
         da = da.interpolate_na('time', method='linear')
         da = da.rolling(time=6, center=True).mean()
     df = da.to_dataset('ID').to_dataframe()
+    return df
+
+
+def calculate_building_growth_rate_constant(bdf, eyear=2019, syear=2006, phase='End', savepath=None):
+    import pandas as pd
+    div = eyear - syear + 1
+    ccs = bdf['ID'].unique()
+    bdf = bdf[bdf['Phase'] == phase]
+    rates = []
+    cc_ind = []
+    for cc in ccs:
+        end_data = bdf[(bdf['ID'] == cc) & (bdf['Year'] == eyear)
+                       ].loc[:, '1room':'Total'].reset_index(drop=True)
+        start_data = bdf[(bdf['ID'] == cc) & (bdf['Year'] == syear)
+                         ].loc[:, '1room':'Total'].reset_index(drop=True)
+        # if end_data.empty:
+            # print(cc, 'end')
+        rate = (end_data - start_data) / div
+        if len(rate) > 1:
+            continue
+        if (rate.empty) or (rate.T[0].isnull().sum() == 7):
+            # print(cc)
+            continue
+        else:
+            rates.append(rate)
+            cc_ind.append(cc)
+    df = pd.concat(rates, axis=0)
+    df.index = cc_ind
+    df.index.name = 'ID'
+    if savepath is not None:
+        filename = 'Building_{}_growth_rate_{}-{}.csv'.format(phase, syear, eyear)
+        df.to_csv(savepath/filename, na_rep='None')
+        print('{} was saved to {}.'.format(filename, savepath))
     return df
 
 
