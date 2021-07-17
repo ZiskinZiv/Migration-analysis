@@ -2,13 +2,261 @@
 # -*- coding: utf-8 -*-
 """
 Created on Fri Jun 18 08:32:19 2021
-
+revi take: plot time series of deal amount for SEI/P2015 clusters (5 or 10) on settelament level
+and then on the right a map with corohpleths with mean/median value
+for this, i need to prepare the muni shapefile with RC in it.
 @author: shlomi
 """
 from MA_paths import work_david
+from shapely.geometry import *
 nadlan_path = work_david / 'Nadlan_deals'
 apts = ['דירה', 'דירה בבית קומות']
 muni_path = work_david/'gis/muni_il'
+dis_dict = {}
+dis_dict['ירושלים'] = 1
+dis_dict['הצפון'] = 2
+dis_dict['חיפה'] = 3
+dis_dict['המרכז'] = 4
+dis_dict['תל אביב'] = 5
+dis_dict['הדרום'] = 6
+dis_dict['יו"ש'] = 7
+dis_en = {1: 'Jerusalem', 2: 'North', 3: 'Haifa',
+          4: 'Center', 5: 'Tel-Aviv', 6: 'South',
+          7: 'J&S'}
+P2015_2_dict = {1: 1,
+                2: 1,
+                3: 2,
+                4: 2,
+                5: 3,
+                6: 4,
+                7: 4,
+                8: 5,
+                9: 5,
+                10: 5}
+
+
+def extract_JS_settelments_from_stat_areas(path=work_david, muni_path=muni_path):
+    from cbs_procedures import read_statistical_areas_gis_file
+    from cbs_procedures import read_bycode_city_data
+    import pandas as pd
+    st = read_statistical_areas_gis_file(path)
+    import geopandas as gpd
+    print('extrcting JS big settelments...')
+    # J&S city codes from nadlan database:
+    js_cc = [3780, 3616, 3730, 3797, 3760, 3570, 3769, 3640, 3720,
+             3778]
+    # js_st = st[st['city_code'].isin(js_cc)]
+    ccs = st[st['city_code'].isin(js_cc)]['city_code'].unique()
+    js = st[st['city_code'].isin(ccs)]
+    sers = []
+    for cc in ccs:
+        cols = js[js['city_code']==cc].loc[:, ['city_code', 'NameHe', 'NameEn']]
+        ser = gpd.GeoSeries(js[js['city_code']==cc]['geometry'].unary_union)
+        ser['city_code'] = cols['city_code'].unique()[0]
+        ser['NameHe'] = cols['NameHe'].unique()[0]
+        ser['NameEn'] = cols['NameEn'].unique()[0]
+        ser = ser.rename({0: 'geometry'})
+        sers.append(ser)
+    gdf = gpd.GeoDataFrame(sers, geometry='geometry')
+    geos_to_complete = [1, 2, 4, 8, 9]
+    city_codes_to_complete = [ccs[x] for x in geos_to_complete]
+    bycode = read_bycode_city_data(path)
+    names = [bycode.loc[x]['NameHe'] for x in city_codes_to_complete]
+    js = gpd.read_file(muni_path/'JS_plans.shp')
+    geos = [js[js['P_NAME']==x].geometry.unary_union for x in names]
+    sers = []
+    for i, geo in zip(geos_to_complete, geos):
+        ser = gpd.GeoSeries(geo)
+        ser['city_code'] = gdf.iloc[i]['city_code']
+        ser['NameHe'] = gdf.iloc[i]['NameHe']
+        ser['NameEn'] = gdf.iloc[i]['NameEn']
+        ser = ser.rename({0: 'geometry'})
+        sers.append(ser)
+    gdf = gdf.drop(geos_to_complete, axis=0)
+    gdf1 = gpd.GeoDataFrame(sers, geometry='geometry')
+    gdf = pd.concat([gdf, gdf1], axis=0)
+    gdf['district'] = 'יו"ש'
+    return gdf
+
+
+def prepare_municiapal_level_gis_areas(path=work_david, muni_path=muni_path):
+    import geopandas as gpd
+    import pandas as pd
+    js = extract_JS_settelments_from_stat_areas(path, muni_path)
+    muni = gpd.read_file(path/'gis/muni_il/muni_il.shp')
+    muni['city_code'] = pd.to_numeric(muni['CR_LAMAS'])
+    muni['Machoz'] = muni['Machoz'].str.replace('צפון', 'הצפון')
+    muni['Machoz'] = muni['Machoz'].str.replace('דרום', 'הדרום')
+    muni['Machoz'] = muni['Machoz'].str.replace('מרכז', 'המרכז')
+    muni_type_dict = {}
+    muni_type_dict['עירייה'] = 'City'
+    muni_type_dict['מועצה מקומית'] = 'LC'
+    muni_type_dict['מועצה אזורית'] = 'RC'
+    muni_type_dict['ללא שיפוט'] = 'NA'
+    muni_type_dict['מועצה מקומית תעשייתית'] = 'ILC'
+    muni['muni_type'] = muni['Sug_Muni'].map(muni_type_dict)
+    muni['rc_code'] = muni[muni['muni_type'] ==
+                           'RC']['CR_PNIM'].str[2:4].astype(int)
+    print('aggragating polygons to city/rc level...')
+    rc = muni[muni['muni_type'] == 'RC']
+    non_rc = muni[muni['muni_type'] != 'RC']
+    sers = []
+    for nrc in rc['rc_code'].unique():
+        geo = rc[rc['rc_code'] == nrc]['geometry'].unary_union
+        geo = remove_third_dimension(geo)
+        ser = gpd.GeoSeries(geo)
+        ser['rc_code'] = nrc
+        ser['NameHe'] = rc[rc['rc_code'] == nrc]['Muni_Heb'].unique()[0]
+        ser['NameEn'] = rc[rc['rc_code'] == nrc]['Muni_Eng'].unique()[0]
+        ser['district'] = rc[rc['rc_code'] == nrc]['Machoz'].unique()[0]
+        ser = ser.rename({0: 'geometry'})
+        sers.append(ser)
+    gdf_rc = gpd.GeoDataFrame(sers, geometry='geometry')
+    sers = []
+    ccs = non_rc[~non_rc['city_code'].isnull()]['city_code'].unique()
+    for cc in ccs:
+        # print(cc)
+        geo = non_rc[non_rc['city_code'] == cc]['geometry'].unary_union
+        geo = remove_third_dimension(geo)
+        ser = gpd.GeoSeries(geo)
+        ser['city_code'] = cc
+        ser['NameHe'] = non_rc[non_rc['city_code'] == cc]['Muni_Heb'].unique()[
+            0]
+        ser['NameEn'] = non_rc[non_rc['city_code'] == cc]['Muni_Eng'].unique()[
+            0]
+        ser['district'] = non_rc[non_rc['city_code'] == cc]['Machoz'].unique()[
+            0]
+        ser = ser.rename({0: 'geometry'})
+        sers.append(ser)
+    gdf_nonrc = gpd.GeoDataFrame(sers, geometry='geometry')
+    gdf = pd.concat([gdf_rc, gdf_nonrc, js], axis=0)
+    gdf.geometry = gdf.geometry.simplify(10)
+    gdf = gdf.reset_index(drop=True)
+    filename = 'Municipal+J&S+Regional.shp'
+    gdf.to_file(muni_path/filename, encoding='cp1255')
+    print('{} was saved to {}.'.format(filename, muni_path))
+    return gdf
+
+
+def remove_third_dimension(geom):
+    if geom.is_empty:
+        return geom
+
+    if isinstance(geom, Polygon):
+        exterior = geom.exterior
+        new_exterior = remove_third_dimension(exterior)
+
+        interiors = geom.interiors
+        new_interiors = []
+        for int in interiors:
+            new_interiors.append(remove_third_dimension(int))
+
+        return Polygon(new_exterior, new_interiors)
+
+    elif isinstance(geom, LinearRing):
+        return LinearRing([xy[0:2] for xy in list(geom.coords)])
+
+    elif isinstance(geom, LineString):
+        return LineString([xy[0:2] for xy in list(geom.coords)])
+
+    elif isinstance(geom, Point):
+        return Point([xy[0:2] for xy in list(geom.coords)])
+
+    elif isinstance(geom, MultiPoint):
+        points = list(geom.geoms)
+        new_points = []
+        for point in points:
+            new_points.append(remove_third_dimension(point))
+
+        return MultiPoint(new_points)
+
+    elif isinstance(geom, MultiLineString):
+        lines = list(geom.geoms)
+        new_lines = []
+        for line in lines:
+            new_lines.append(remove_third_dimension(line))
+
+        return MultiLineString(new_lines)
+
+    elif isinstance(geom, MultiPolygon):
+        pols = list(geom.geoms)
+
+        new_pols = []
+        for pol in pols:
+            new_pols.append(remove_third_dimension(pol))
+
+        return MultiPolygon(new_pols)
+
+    elif isinstance(geom, GeometryCollection):
+        geoms = list(geom.geoms)
+
+        new_geoms = []
+        for geom in geoms:
+            new_geoms.append(remove_third_dimension(geom))
+
+        return GeometryCollection(new_geoms)
+
+    else:
+        raise RuntimeError("Currently this type of geometry is not supported: {}".format(type(geom)))
+
+
+def create_israel_districts(path=muni_path):
+    import geopandas as gpd
+    import pandas as pd
+    from shapely.geometry import MultiPolygon, Polygon, LineString
+    from shapely.ops import cascaded_union
+    muni = gpd.read_file(path/'muni_il.shp')
+    muni['Machoz'] = muni['Machoz'].str.replace('צפון', 'הצפון')
+    muni['Machoz'] = muni['Machoz'].str.replace('דרום', 'הדרום')
+    muni['Machoz'] = muni['Machoz'].str.replace('מרכז', 'המרכז')
+
+    dists = muni['Machoz'].unique()
+    sers = []
+    for dis in dists:
+        print(dis)
+        # print(dis)
+        geo = muni[muni['Machoz'] == dis].geometry.unary_union
+        if isinstance(geo, MultiPolygon):
+            eps = 0.01
+            omega = cascaded_union([
+                Polygon(component.exterior).buffer(eps).buffer(-eps) for component in geo
+            ])
+            geo = omega[0]
+        geo = remove_third_dimension(geo)
+        ser = gpd.GeoSeries(geo)
+        ser = ser.rename({0: 'geometry'})
+        # print(type(ser))
+        ser['district'] = dis
+        ser['district_EN'] = dis_en[dis_dict[dis]]
+        ser['district_code'] = dis_dict[dis]
+        bound = ser['geometry'].boundary
+        if not isinstance(bound, LineString):
+            ser['geometry'] = Polygon(bound[0])
+        # ser['geometry'] = ser['geometry'].simplify(0.1)
+        # ser.crs = muni.crs
+        sers.append(ser)
+    # now add J&S:
+    js = gpd.read_file(path/'J&S_matakim.geojson')
+    js = js.to_crs(2039)
+    js1 = gpd.GeoSeries(js.geometry.unary_union)
+    js1 = js1.rename({0: 'geometry'})
+    js1['district'] = 'יו"ש'
+    js1['district_EN'] = 'J&S'
+    js1['district_code'] = 7
+    js1 = gpd.GeoDataFrame([js1])
+    b = js1.geometry.boundary.values[0]
+    js1['geometry'] = Polygon(b[0])
+    js1.index = [6]
+    # sers.append(js1)
+    dgf = gpd.GeoDataFrame(sers, geometry='geometry', crs=muni.crs)
+    dgf = pd.concat([dgf, js1], axis=0)
+    dgf = dgf.rename(
+        {'district': 'NameHe', 'district_EN': 'NameEn', 'district_code': 'Code'}, axis=1)
+    dgf.geometry = dgf.geometry.simplify(10)
+    filename = 'Israel_districts_incl_J&S.shp'
+    dgf.to_file(path/filename)
+    print('{} was saved to {}.'.format(filename, path))
+    return dgf
 
 
 def create_higher_group_category(df, existing_col='SEI_cluster', n_groups=2,
@@ -31,12 +279,41 @@ def create_higher_group_category(df, existing_col='SEI_cluster', n_groups=2,
     return df
 
 
+def geolocate_nadlan_deals_within_city_or_rc(df, muni_path=muni_path,
+                                             savepath=work_david):
+    import geopandas as gpd
+    import pandas as pd
+    # run load_nadlan_combined_deal with return_XY and without add_geo_layers:
+    gdf = gpd.read_file(muni_path/'Municipal+J&S+Regional.shp')
+    print('geolocating nadlan deals within city or RC...')
+    total = gdf.index.size
+    keys = []
+    for i, row in gdf.iterrows():
+        print('index: {} / {}'.format(i, total))
+        within = df.geometry.within(row['geometry'])
+        if within.sum() == 0:
+            print('empty..')
+            continue
+        inds = df.loc[within].index
+        dff = pd.DataFrame(df.loc[inds, 'KEYVALUE'])
+        dff['muni_gdf_index'] = i
+        keys.append(dff)
+    filename = 'Muni_gdf_KEYVALUE_index.csv'
+    dff = pd.concat(keys, axis=0)
+    dff.to_csv(savepath/filename, na_rep='None')
+    print('Done!')
+    return dff
+
+
 def load_nadlan_combined_deal(path=work_david, times=['1998Q1', '2021Q1'],
-                              dealamount_iqr=2, return_XY=False, add_bgr='Total'):
+                              dealamount_iqr=2, return_XY=False, add_bgr='Total',
+                              add_geo_layers=True, add_mean_salaries=True):
     import pandas as pd
     from Migration_main import path_glob
     import geopandas as gpd
+    from cbs_procedures import read_statistical_areas_gis_file
     import numpy as np
+    from cbs_procedures import read_mean_salary
 
     def add_bgr_func(grp, bgr, rooms='Total'):
         import numpy as np
@@ -48,12 +325,33 @@ def load_nadlan_combined_deal(path=work_david, times=['1998Q1', '2021Q1'],
         grp['Building_Growth_Rate'] = gr
         return grp
 
+    def add_stat_area_func(grp, stat_gdf):
+        city_code11 = grp['city_stat_code'].unique()[0]
+        geo = stat_gdf[stat_gdf['city_stat11']==city_code11].geometry.item()
+        grp['stat_geo'] = [geo]*len(grp)
+        return grp
+
+    def add_district_area_func(grp, dis_df):
+        district_code = grp['district_code'].unique()[0]
+        geo = dis_df[dis_df['Code']==district_code].geometry.item()
+        grp['district_geo'] = [geo]*len(grp)
+        return grp
+
+    def add_mean_salary_func(grp, sal):
+        year = grp['year'].unique()[0]
+        salary = sal[sal['year']==year]['mean_salary'].item()
+        grp['mean_salary'] = [salary]*len(grp)
+        return grp
+
+
     file = path_glob(
         path, 'Nadlan_deals_neighborhood_combined_processed_*.csv')
     dtypes = {'FULLADRESS': 'object', 'Street': 'object', 'FLOORNO': float,
               'NEWPROJECTTEXT': bool, 'PROJECTNAME': 'object', 'DEALAMOUNT': float}
     df = pd.read_csv(file[0], na_values='None', parse_dates=['DEALDATETIME'],
                      dtype=dtypes)
+    # filter nans:
+    df = df[~df['district'].isnull()]
     if times is not None:
         print('Slicing to times {} to {}.'.format(*times))
         # df = df[df['year'].isin(np.arange(years[0], years[1] + 1))]
@@ -65,6 +363,12 @@ def load_nadlan_combined_deal(path=work_david, times=['1998Q1', '2021Q1'],
         df = df[~df.groupby('year')['DEALAMOUNT'].apply(
             is_outlier, method='iqr', k=dealamount_iqr)]
     df = df.reset_index(drop=True)
+    print('loading gdf muni index...')
+    df['P2015_cluster2'] = df['P2015_cluster'].map(P2015_2_dict)
+    gdf_index = pd.read_csv(path/'Muni_gdf_KEYVALUE_index.csv', na_values='None')
+    gdf_index = gdf_index.set_index('KEYVALUE')
+    di = gdf_index['muni_gdf_index'].to_dict()
+    df['gdf_muni_index'] = df['KEYVALUE'].map(di)
     if return_XY:
         inds = df[df['X'] == 0].index
         df.loc[inds, 'X'] = np.nan
@@ -72,12 +376,24 @@ def load_nadlan_combined_deal(path=work_david, times=['1998Q1', '2021Q1'],
         df.loc[inds, 'Y'] = np.nan
         df = gpd.GeoDataFrame(
             df, geometry=gpd.points_from_xy(df['X'], df['Y']))
+    if add_mean_salaries:
+        sal = read_mean_salary()
+        df = df.groupby('year').apply(add_mean_salary_func, sal)
+        df['MSAL_per_ASSET'] = (df['DEALAMOUNT'] / df['mean_salary']).round()
     if add_bgr is not None:
         print('Adding Building Growth rate.')
         file = path_glob(path, 'Building_*_growth_rate_*.csv')[0]
         bgr = pd.read_csv(file, na_values='None', index_col='ID')
         df = df.groupby('city_code').apply(add_bgr_func, bgr, rooms=add_bgr)
         df.loc[df['Building_Growth_Rate'] == 0] = np.nan
+    if add_geo_layers:
+        print('adding statistical area geometry')
+        stat_gdf = read_statistical_areas_gis_file(path)
+        df = df.groupby('city_stat_code').apply(add_stat_area_func, stat_gdf)
+        print('adding district area geometry')
+        dis_df = gpd.read_file(path/'gis/muni_il/Israel_districts_incl_J&S.shp')
+        df['district_code'] = df['district'].map(dis_dict)
+        df = df.groupby('district_code').apply(add_district_area_func, dis_df)
     return df
 
 
@@ -145,6 +461,36 @@ def load_nadlan_deals(path=work_david, csv=True,
         bdf1.columns = cols
         df = pd.concat([df, bdf1], axis=1)
     return df
+
+
+def plot_mean_salary_per_asset(df, year=2000, rooms=[3, 4]):
+    import geopandas as gpd
+    import seaborn as sns
+    from pysal.viz.splot.mapping import vba_choropleth
+    import matplotlib.pyplot as plt
+    sns.set_theme(style='ticks', font_scale=1.5)
+    df = df[df['DEALNATUREDESCRIPTION'].isin(apts)]
+    print('picked {} only.'.format(apts))
+    df = df[df['ASSETROOMNUM'].isin(rooms)]
+    print('picked {} rooms only.'.format(rooms))
+    gdf = gpd.GeoDataFrame(df, geometry='district_geo')
+    print('picked year {}.'.format(year))
+    gdf = gdf[gdf['year'] == year]
+    # return gdf
+    fig, axs = plt.subplots(1, 2, figsize=(15, 10))
+    gdf['district_counts'] = gdf.groupby('district')['DEALAMOUNT'].transform('count')
+    x = gdf['MSAL_per_ASSET'].values
+    y = gdf['district_counts'].values
+    gdf.plot(ax=axs[0],
+             column="MSAL_per_ASSET",
+             legend=True,
+             scheme='quantiles',
+             cmap='Blues')
+    # vba_choropleth(x, y, gdf, rgb_mapclassify=dict(classifier='quantiles'),
+                   # alpha_mapclassify=dict(classifier='quantiles'),
+                   # cmap='RdBu', ax=axs[1])
+    fig.tight_layout()
+    return fig
 
 
 def add_city_polygons_to_nadlan_df(df, muni_path=muni_path):
