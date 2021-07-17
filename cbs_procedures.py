@@ -52,18 +52,88 @@ def read_mean_salary(path=work_david, resample='AS'):
     if resample is not None:
         df = df.resample(resample).mean()
     # df = df.drop('year', axis=1)
-    return df['mean_salary']
+    df['year'] = df.index.year
+    return df[['mean_salary', 'year']]
 
 
-def read_social_economic_index(path=work_david):
+# def read_social_economic_index(path=work_david):
+#     import pandas as pd
+#     df = pd.read_excel(
+#         path/'social_economic_index_statistical_areas_2015.xls',
+#         skiprows=7)
+#     df.drop(df.tail(3).index, inplace=True)
+#     df.columns = ['city_code', 'NameHe', 'stat_code', 'population',
+#                   'index_value', 'rank', 'cluster', 'NameEn']
+#     return df
+def plot_SEI_and_P2015(path=work_david):
+    import seaborn as sns
+    import matplotlib.pyplot as plt
+    sns.set_theme(style='ticks', font_scale=1.5)
+    # fig, ax = plt.subplots(figsize=(10, 8))
+    df = read_social_economic_index(path, return_stat=False)
+    dfp = read_periphery_index(path)
+    df['P2015'] = dfp['P2015_value']
+    g = sns.jointplot(data=df, x="index2017", y="P2015", hue='Type',
+                      s=15, height=10)
+    g.plot_joint(sns.kdeplot, zorder=-1, levels=6)
+    g.ax_joint.grid(True)
+    g.fig.tight_layout()
+    g.ax_joint.set_xlabel('SEI 2017')
+    g.ax_joint.set_ylabel('Periphery Index 2015')
+    corr_lc = df[df['Type']=='City/LC'].loc[:,['index2017','P2015']].corr()['P2015']['index2017']
+    n_lc = len(df[df['Type']=='City/LC'].loc[:,['index2017','P2015']].dropna())
+    n_rc = len(df[df['Type']=='RC'].loc[:,['index2017','P2015']].dropna())
+    corr_rc = df[df['Type']=='RC'].loc[:,['index2017','P2015']].corr()['P2015']['index2017']
+    textstr = '\n'.join([r'City/LC corr: {:.2f}, n={}'.format(corr_lc, n_lc),
+    r'RC        corr: {:.2f}, n={}'.format(corr_rc, n_rc)])
+    # text_str = 'n_LC={}, r_LC={:.1f}'.format(n_lc, corr_lc)
+    props = dict(boxstyle='round', facecolor='wheat', alpha=0.5, edgecolor='k')
+    print(textstr)
+    g.ax_joint.text(0.24, 0.9, textstr,
+                    verticalalignment='top', horizontalalignment='center',
+                    transform=g.ax_joint.transAxes, color='k', fontsize=18, bbox=props)
+
+    # ax.legend(['dd','gg'])
+    # ax.grid(True)
+    # g.plot_joint(sns.kdeplot, color="r", zorder=0, levels=6)
+    # g.plot_marginals(sns.rugplot, color="r", height=-.15, clip_on=False)
+    return g
+
+
+def read_social_economic_index(path=work_david, return_stat=True):
     import pandas as pd
+    # first read statistical areas:
     df = pd.read_excel(
-        path/'social_economic_index_statistical_areas_2015.xls',
-        skiprows=7)
-    df.drop(df.tail(3).index, inplace=True)
-    df.columns = ['city_code', 'NameHe', 'stat_code', 'population',
-                  'index_value', 'rank', 'cluster', 'NameEn']
-    return df
+        path/'social_economic_index_stat_areas_2017.xlsx',
+        skiprows=8)
+    df.drop(df.tail(6).index, inplace=True)
+    df.columns = ['muni_status', 'city_code', 'NameHe', 'NameEn', 'city_cluster2017', 'city_cluster2015',
+                  'stat_code', 'pop2017', 'index_value2017', 'rank2017', 'cluster2017', 'cluster2015']
+    # now, read cities and settelments within regional councils:
+    dfm = pd.read_excel(
+        path/'social_economic_index_local_muni_2017.xlsx',
+        skiprows=5)
+    dfm.drop(dfm.tail(4).index, inplace=True)
+    dfm.columns = ['muni_state', 'city_code', 'NameHe', 'pop2017', 'index2017',
+                   'rank2017', 'cluster2017', 'rank2015', 'cluster2015', 'cluster_diff', 'NameEn']
+    dfm['Type'] = 'City/LC'
+    dfr = pd.read_excel(
+        path/'social_economic_index_regional_councils_2017.xlsx',
+        skiprows=10)
+    dfr.drop(dfr.tail(9).index, inplace=True)
+    dfr.columns = ['muni_state', 'RC_NameHe', 'RC_NameEn', 'RC_cluster2017', 'RC_cluster2015', 'city_code',
+                   'NameHe', 'NameEn', 'locality_type', 'pop2017', 'index2017', 'rank2017', 'cluster2017', 'cluster2015']
+    dfr['Type'] = 'RC'
+    dff = pd.concat([dfm, dfr], axis=0)
+    stype = dff['Type']
+    dff = dff.loc[:, 'muni_state':'NameEn']
+    dff['Type'] = stype
+    dff = dff[~dff['city_code'].isnull()]
+    dff.set_index('city_code', inplace=True)
+    if return_stat:
+        return df
+    else:
+        return dff
 
 
 def read_statistical_areas_gis_file(path=work_david):
