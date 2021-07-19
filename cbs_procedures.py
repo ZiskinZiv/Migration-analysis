@@ -102,6 +102,16 @@ def plot_SEI_and_P2015(path=work_david):
 
 def read_social_economic_index(path=work_david, return_stat=True):
     import pandas as pd
+    SEI_cluster_dict = {1: 1,
+                        2: 1,
+                        3: 2,
+                        4: 2,
+                        5: 3,
+                        6: 3,
+                        7: 4,
+                        8: 4,
+                        9: 5,
+                        10: 5}
     # first read statistical areas:
     df = pd.read_excel(
         path/'social_economic_index_stat_areas_2017.xlsx',
@@ -125,11 +135,13 @@ def read_social_economic_index(path=work_david, return_stat=True):
                    'NameHe', 'NameEn', 'locality_type', 'pop2017', 'index2017', 'rank2017', 'cluster2017', 'cluster2015']
     dfr['Type'] = 'RC'
     dff = pd.concat([dfm, dfr], axis=0)
-    stype = dff['Type']
-    dff = dff.loc[:, 'muni_state':'NameEn']
-    dff['Type'] = stype
+    # stype = dff['Type']
+    # dff = dff.loc[:, 'muni_state':'NameEn']
+    # dff['Type'] = stype
     dff = dff[~dff['city_code'].isnull()]
     dff.set_index('city_code', inplace=True)
+    dff['SEI2_cluster'] = dff['cluster2017'].map(SEI_cluster_dict)
+    dff['RC_SEI2_cluster'] = dff['RC_cluster2017'].map(SEI_cluster_dict)
     if return_stat:
         return df
     else:
@@ -208,6 +220,21 @@ def read_street_city_names(path=work_david, filter_neighborhoods=True,
 
 def read_periphery_index(path=work_david):
     import pandas as pd
+    P_cluster_dict = {1: 1,
+                      2: 1,
+                      3: 2,
+                      4: 2,
+                      5: 3,
+                      6: 4,
+                      7: 4,
+                      8: 5,
+                      9: 5,
+                      10: 5}
+    P_cluster_name = {1: 'Very Peripheral',
+                      2: 'Peripheral',
+                      3: 'In Between',
+                      4: 'Centralized',
+                      5: 'Very Centralized'}
     df = pd.read_excel(
         path/'peripheri_index_cbs_2015_local_cities.xls', skiprows=8)
     cols = ['municipal_status', 'city_code', 'NameHe', 'NameEn', 'Pop2015', 'TLV_proximity_value',
@@ -225,6 +252,23 @@ def read_periphery_index(path=work_david):
     df_r.set_index('city_code', inplace=True)
     dff = pd.concat([df, df_r], axis=0)
     dff.index = dff.index.astype(int)
+    City = dff.loc[(dff['municipal_status'] == 0) |
+                   (dff['municipal_status'] == 99)].index
+    dff.loc[City, 'Type'] = 'City/LC'
+    RC = dff.loc[(dff['municipal_status'] != 0) & (
+        dff['municipal_status'] != 99)].index
+    dff.loc[RC, 'Type'] = 'RC'
+    # now read whole regional counsils P2015 cluster:
+    df_rc = pd.read_excel(
+        path/'peripheri_index_cbs_2015_just_regional_councils.xls', skiprows=9)
+    df_rc.columns = ['municipal_status', 'RC_nameHe', 'RC_nameEn', 'RC_P2015_cluster', 'city_code', 'NameHe',
+                     'NameEn', 'Pop2015', 'Sub_district', 'TLV_distance', 'P2015_value', 'P2015_rank', 'P2015_cluster']
+    df_rc.set_index('city_code', inplace=True)
+    dff['RC_P2015_cluster'] = df_rc['RC_P2015_cluster']
+    dff['P2_cluster'] = dff['P2015_cluster'].map(P_cluster_dict)
+    dff['P2_cluster_name'] = dff['P2_cluster'].map(P_cluster_name)
+    dff['RC_P2_cluster'] = dff['RC_P2015_cluster'].map(P_cluster_dict)
+    dff['RC_P2_cluster_name'] = dff['RC_P2_cluster'].map(P_cluster_name)
     return dff
 
 
