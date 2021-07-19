@@ -34,13 +34,18 @@ P2015_2_dict = {1: 1,
                 9: 5,
                 10: 5}
 
+P2015_2_name = {1: 'Very Peripheral',
+                2: 'Peripheral',
+                3: 'In Between',
+                4: 'Centralized',
+                5: 'Very Centralized'}
 
 def extract_JS_settelments_from_stat_areas(path=work_david, muni_path=muni_path):
     from cbs_procedures import read_statistical_areas_gis_file
     from cbs_procedures import read_bycode_city_data
     import pandas as pd
-    st = read_statistical_areas_gis_file(path)
     import geopandas as gpd
+    st = read_statistical_areas_gis_file(path)
     print('extrcting JS big settelments...')
     # J&S city codes from nadlan database:
     js_cc = [3780, 3616, 3730, 3797, 3760, 3570, 3769, 3640, 3720,
@@ -79,7 +84,36 @@ def extract_JS_settelments_from_stat_areas(path=work_david, muni_path=muni_path)
     return gdf
 
 
-def prepare_municiapal_level_gis_areas(path=work_david, muni_path=muni_path):
+def prepare_just_city_codes_gis_areas(path=work_david, muni_path=muni_path):
+    import geopandas as gpd
+    import pandas as pd
+    from cbs_procedures import read_statistical_areas_gis_file
+    js = extract_JS_settelments_from_stat_areas(path, muni_path)
+    js = js.drop('district', axis=1)
+    js_ccs = js['city_code'].unique()
+    st = read_statistical_areas_gis_file(path)
+    ccs = st['city_code'].unique()
+    sers = []
+    ccs = [x for x in ccs if x not in js_ccs]
+    for cc in ccs:
+        geo = st[st['city_code'] == cc]['geometry'].unary_union
+        geo = remove_third_dimension(geo)
+        ser = gpd.GeoSeries(geo)
+        ser['city_code'] = cc
+        ser['NameHe'] = st[st['city_code'] == cc]['NameHe'].unique()[0]
+        ser['NameEn'] = st[st['city_code'] == cc]['NameEn'].unique()[0]
+        ser = ser.rename({0: 'geometry'})
+        sers.append(ser)
+    gdf_cc = gpd.GeoDataFrame(sers, geometry='geometry')
+    gdf = pd.concat([gdf_cc, js], axis=0)
+    gdf = gdf.set_index('city_code')
+    filename = 'Municipal+J&S+city_code_level.shp'
+    gdf.to_file(muni_path/filename, encoding='cp1255', index=True, na_rep='None')
+    print('{} was saved to {}.'.format(filename, muni_path))
+    return gdf
+
+
+def prepare_municiapal_level_and_RC_gis_areas(path=work_david, muni_path=muni_path):
     import geopandas as gpd
     import pandas as pd
     js = extract_JS_settelments_from_stat_areas(path, muni_path)
@@ -463,6 +497,44 @@ def load_nadlan_deals(path=work_david, csv=True,
     return df
 
 
+def prepare_periphery_sei_index_map(path=work_david, muni_path=muni_path):
+    from cbs_procedures import read_periphery_index
+    from cbs_procedures import read_social_economic_index
+    import geopandas as gpd
+    df = read_periphery_index(path)
+    sei = read_social_economic_index(path, return_stat=False)
+    muni_gdf = gpd.read_file(muni_path/'Municipal+J&S+Regional.shp')
+    # first put RC P2015 cluster, rank and value:
+    rc = df[df['Type'] == 'RC']
+    sei_rc = sei[sei['Type'] == 'RC']
+    for rc_n in rc['municipal_status'].unique():
+        ind = muni_gdf[muni_gdf['rc_code'] == rc_n].index
+        muni_gdf.loc[ind, 'P2015_value'] = rc[rc['municipal_status']
+                                              == rc_n]['P2015_value'].mean()
+        muni_gdf.loc[ind, 'P2015_cluster'] = rc[rc['municipal_status']
+                                                == rc_n]['RC_P2015_cluster'].unique()[0]
+        muni_gdf.loc[ind, 'P2015_cluster2'] = rc[rc['municipal_status']
+                                             == rc_n]['RC_P2_cluster'].unique()[0]
+        muni_gdf.loc[ind, 'SEI_value'] = sei_rc[sei_rc['muni_state']
+                                              == rc_n]['index2017'].mean()
+        muni_gdf.loc[ind, 'SEI_cluster'] = sei_rc[sei_rc['muni_state']
+                                              == rc_n]['RC_cluster2017'].unique()[0]
+        muni_gdf.loc[ind, 'SEI2_cluster'] = sei_rc[sei_rc['muni_state']
+                                              == rc_n]['RC_SEI2_cluster'].unique()[0]
+
+    city = df[df['Type'] == 'City/LC']
+    sei_city = sei[sei['Type'] == 'City/LC']
+    for cc in city.index:
+        ind = muni_gdf[muni_gdf['city_code'] == cc].index
+        muni_gdf.loc[ind, 'P2015_value'] = city.loc[cc, 'P2015_value']
+        muni_gdf.loc[ind, 'P2015_cluster'] = city.loc[cc, 'P2015_cluster']
+        muni_gdf.loc[ind, 'P2015_cluster2'] = city.loc[cc, 'P2_cluster']
+        muni_gdf.loc[ind, 'SEI_value'] = sei_city.loc[cc, 'index2017']
+        muni_gdf.loc[ind, 'SEI_cluster'] = sei_city.loc[cc, 'cluster2017']
+        muni_gdf.loc[ind, 'SEI2_cluster'] = sei_city.loc[cc, 'SEI2_cluster']
+    return muni_gdf
+
+
 def plot_mean_salary_per_asset(df, year=2000, rooms=[3, 4]):
     import geopandas as gpd
     import seaborn as sns
@@ -491,6 +563,154 @@ def plot_mean_salary_per_asset(df, year=2000, rooms=[3, 4]):
                    # cmap='RdBu', ax=axs[1])
     fig.tight_layout()
     return fig
+
+
+def calculate_pct_change_by_yearly_periods_and_grps(df,
+                                                    period1=[1999, 2007],
+                                                    period2=[2017, 2019],
+                                                    col='DEALAMOUNT',
+                                                    agg='median',
+                                                    grp='gdf_muni_index',
+                                                    min_p1_deals=50):
+    print('calculating pct change for {} col using {} grouping and {} statistic.'.format(col, grp, agg))
+    print('periods are: {}-{} compared to {}-{}'.format(period2[0], period2[1], period1[0], period1[1]))
+    df1 = df.loc[(df['year']>=period1[0]) & (df['year']<=period1[1])]
+    df2 = df.loc[(df['year']>=period2[0]) & (df['year']<=period2[1])]
+    df1_agg = df1.groupby(grp).agg(agg)
+    df1_cnt = df1.groupby(grp)[col].agg('count')
+    df2_agg = df2.groupby(grp).agg(agg)
+    df2_cnt = df2.groupby(grp)[col].agg('count')
+    df_col = df2_agg[col] - df1_agg[col]
+    df_col /= df1_agg[col]
+    df_col *= 100
+    df_col = df_col.round()
+    df_col = df_col.to_frame('pct_change')
+    df_col['period1_cnt'] = df1_cnt
+    df_col['period2_cnt'] = df2_cnt
+    if min_p1_deals is not None:
+        print('filtering minimum deals of {} for {}-{} period.'.format(min_p1_deals, period1[0], period1[1]))
+        df_col = df_col[df_col['period1_cnt']>=min_p1_deals]
+    return df_col
+
+
+def plot_choropleth_muni_level(df, rooms=[3, 4], muni_path=muni_path,
+                               hue='SEI2_cluster',
+                               col='NIS_per_M2'):
+    # import geopandas as gpd
+    import seaborn as sns
+    import matplotlib.pyplot as plt
+    import numpy as np
+    import pandas as pd
+    import matplotlib.dates as mdates
+    import contextily as ctx
+
+    sns.set_theme(style='ticks', font_scale=1.5)
+    cmap = sns.dark_palette((260, 75, 60), input="husl", n_colors=5, as_cmap=True)
+    cmap = sns.cubehelix_palette(5, gamma = 1, as_cmap=True)
+    cmap = sns.cubehelix_palette(5, start = .5, rot = -.75, as_cmap=True)
+    # cmap = sns.color_palette("Greens", 5, as_cmap=True)
+    # colors = sns.color_palette("RdPu", 10)[5:]
+    df = df[df['DEALNATUREDESCRIPTION'].isin(apts)]
+    df = df.loc[(df['year'] >= 1999) & (df['year'] <= 2019)]
+    print('picked {} only.'.format(apts))
+    if rooms is not None:
+        df = df[(df['ASSETROOMNUM'] >= rooms[0]) &
+                (df['ASSETROOMNUM'] <= rooms[1])]
+        # df = df[df['ASSETROOMNUM'].isin(rooms)]
+        print('picked {} rooms only.'.format(rooms))
+    if col == 'NIS_per_M2':
+        ylabel = r'Median price per M$^2$ [NIS]'
+    if hue == 'SEI2_cluster':
+        leg_title = 'Social-Economic cluster'
+    elif hue == 'P2015_cluster2':
+        leg_title = 'Periphery cluster'
+    fig, ax = plt.subplots(
+        1, 2, gridspec_kw={'width_ratios': [4, 1]}, figsize=(20, 10))
+    # df['P2015_cluster2'] = df['P2015_cluster2'].map(P2015_2_name)
+    # df = df.rename({'P2015_cluster2': 'Centrality level'}, axis=1)
+    # df['year'] = pd.to_datetime(df['year'], format='%Y')
+    sns.lineplot(data=df, x='year', y=col, hue=hue, n_boot=100,
+                 palette=cmap, estimator="mean", ax=ax[0], ci=99,
+                 style=hue, lw=2, seed=1)
+    ax[0].grid(True)
+    ax[0].set_ylabel(ylabel)
+    gdf = prepare_periphery_sei_index_map(work_david, muni_path)
+    gdf.crs = 2039
+    gdf = gdf.to_crs(3857)
+    gdf.plot(column=hue, categorical=True, legend=False,
+             cmap=cmap, ax=ax[1], edgecolor='k', linewidth=0.25, alpha=0.9)
+    handles, labels = ax[0].get_legend_handles_labels()
+    labels = [int(float(x)) for x in labels]
+    labels = ['{:d}'.format(x) for x in labels]
+    ax[0].legend(handles=handles, labels=labels, title=leg_title)
+    # leg.set_bbox_to_anchor((0.0, 1.0, 0.0, 0.0))
+    # ax[1].set_axis_off()
+    ax[0].set_xlabel('')
+    ax[1].tick_params(left=False, labelleft=False, bottom=False, labelbottom=False)
+    ax[0].xaxis.set_major_formatter(mdates.DateFormatter('%Y'))
+    ax[0].xaxis.set_major_locator(mdates.YearLocator(2))
+    ax[0].tick_params(axis='x', rotation=30)
+    fig.tight_layout()
+    fig.subplots_adjust(top=0.942,
+                        bottom=0.089,
+                        left=0.081,
+                        right=0.987,
+                        hspace=0.02,
+                        wspace=0.0)
+    ctx.add_basemap(ax[1], url=ctx.providers.Stamen.TerrainBackground)
+    # for axis in ['top','bottom','left','right']:
+    #     ax[1].spines[axis].set_linewidth(0.5)
+    return fig
+
+
+# def plot_choropleth_muni_level(df, rooms=[3, 4], muni_path=muni_path,
+#                                muni_type='gdf_muni_index', min_p1=50,
+#                                agg='median', col='NIS_per_M2'):
+#     import geopandas as gpd
+#     import seaborn as sns
+#     import matplotlib.pyplot as plt
+#     import numpy as np
+
+#     # def add_muni_geo_func(grp, muni_gdf):
+#     #     inds = grp['gdf_muni_index'].unique()[0]
+#     #     geo = muni_gdf.loc[inds].geometry
+#     #     grp['muni_geo'] = [geo]*len(grp)
+#     #     return grp
+
+#     sns.set_theme(style='ticks', font_scale=1.5)
+#     df = df[df['DEALNATUREDESCRIPTION'].isin(apts)]
+#     df = df.loc[(df['year']>=1999) & (df['year']<=2019)]
+#     print('picked {} only.'.format(apts))
+#     if rooms is not None:
+#         df = df[(df['ASSETROOMNUM']>=rooms[0]) & (df['ASSETROOMNUM']<=rooms[1])]
+#         # df = df[df['ASSETROOMNUM'].isin(rooms)]
+#         print('picked {} rooms only.'.format(rooms))
+#     df_pct = calculate_pct_change_by_yearly_periods_and_grps(df,
+#                                                              grp=muni_type,
+#                                                              min_p1_deals=min_p1,
+#                                                              col=col,
+#                                                              agg=agg)
+#     fig, ax = plt.subplots(1, 2, gridspec_kw={'width_ratios': [4, 1]}, figsize=(20, 10))
+#     df['P2015_cluster2'] = df['P2015_cluster2'].map(P2015_2_name)
+#     df = df.rename({'P2015_cluster2': 'Centrality level'}, axis=1)
+#     sns.lineplot(data=df, x='year', y=col, hue='Centrality level', n_boot=100,
+#                  palette='Set1',estimator=np.median, ax=ax[0],
+#                  hue_order=[x for x in reversed(P2015_2_name.values())])
+#     ax[0].grid(True)
+#     if muni_type=='gdf_muni_index':
+#         muni_gdf = gpd.read_file(muni_path/'Municipal+J&S+Regional.shp')
+#     elif muni_type=='city_code':
+#         muni_gdf = gpd.read_file(muni_path/'Municipal+J&S+city_code_level.shp')
+#         muni_gdf = muni_gdf.set_index('city_code')
+#     # df = df.groupby('gdf_muni_index').apply(add_muni_geo_func, muni_gdf)
+#     # gdf = gpd.GeoDataFrame(df, geometry='muni_geo')
+#     # inds = muni_gdf[muni_gdf.index.isin(df.index)].index
+#     df_pct.loc[:, 'geometry'] = muni_gdf.loc[df_pct.index]['geometry']
+#     gdf = gpd.GeoDataFrame(df_pct, geometry='geometry')
+#     gdf[gdf['pct_change'] >= 0].plot('pct_change', legend=True, scheme="User_Defined",
+#                                      k=5, cmap='viridis', classification_kwds=dict(bins=[50, 100, 150, 200, 250]),
+#                                      ax=ax[1])
+#     return gdf
 
 
 def add_city_polygons_to_nadlan_df(df, muni_path=muni_path):
