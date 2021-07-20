@@ -341,7 +341,8 @@ def geolocate_nadlan_deals_within_city_or_rc(df, muni_path=muni_path,
 
 def load_nadlan_combined_deal(path=work_david, times=['1998Q1', '2021Q1'],
                               dealamount_iqr=2, return_XY=False, add_bgr='Total',
-                              add_geo_layers=True, add_mean_salaries=True):
+                              add_geo_layers=True, add_mean_salaries=True,
+                              add_neighborhood_uniq_code=True):
     import pandas as pd
     from Migration_main import path_glob
     import geopandas as gpd
@@ -428,13 +429,24 @@ def load_nadlan_combined_deal(path=work_david, times=['1998Q1', '2021Q1'],
         dis_df = gpd.read_file(path/'gis/muni_il/Israel_districts_incl_J&S.shp')
         df['district_code'] = df['district'].map(dis_dict)
         df = df.groupby('district_code').apply(add_district_area_func, dis_df)
+    if add_neighborhood_uniq_code:
+        print('adding neighborhood uniqid...')
+        sviva = pd.read_csv(
+            work_david/'Nadlan_neighborhoods_sviva_data.csv', na_values='None')
+        for i, row in sviva.iterrows():
+            name = row['NEIG_NAMEHE']
+            uniq = row['NEIG_UNIQ_ID']
+            inds = df[df['Neighborhood']==name].index
+            df.loc[inds, 'Neighborhood_code'] = uniq
+        df = df.rename({'Neighborhood_code': 'Neighborhood_uniqid'}, axis=1)
     return df
 
 
 def load_nadlan_deals(path=work_david, csv=True,
                       times=['1998Q1', '2021Q1'], dealamount_iqr=2,
                       fix_new_status=True, add_SEI2_cluster=True,
-                      add_peripheri_data=True, add_bycode_data=True):
+                      add_peripheri_data=True, add_bycode_data=True
+                      ):
     import pandas as pd
     import numpy as np
     from Migration_main import path_glob
@@ -628,7 +640,7 @@ def plot_choropleth_muni_level(df, rooms=[3, 4], muni_path=muni_path,
         1, 2, gridspec_kw={'width_ratios': [4, 1]}, figsize=(20, 10))
     # df['P2015_cluster2'] = df['P2015_cluster2'].map(P2015_2_name)
     # df = df.rename({'P2015_cluster2': 'Centrality level'}, axis=1)
-    # df['year'] = pd.to_datetime(df['year'], format='%Y')
+    df['year'] = pd.to_datetime(df['year'], format='%Y')
     sns.lineplot(data=df, x='year', y=col, hue=hue, n_boot=100,
                  palette=cmap, estimator="mean", ax=ax[0], ci=99,
                  style=hue, lw=2, seed=1)
