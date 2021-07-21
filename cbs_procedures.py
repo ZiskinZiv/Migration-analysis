@@ -355,6 +355,18 @@ def read_boi_mortgage(path=work_david, filename='pribmash.xls',
     return df
 
 
+def read_apts_sold(path=work_david, filename='Apts_sold_2021-07.xls'):
+    import pandas as pd
+    df = pd.read_excel(path/filename, skiprows=2)
+    df.columns = ['trend', 'deseasonlized', 'original','month','year']
+    years = df.groupby('month')['year'].unique()[1]
+    groups=df.groupby('month').groups
+    for mnth, inds in groups.items():
+        print(len(years), len(inds))
+        df.loc[inds, 'year'] = years
+    return df
+
+
 def read_boi_interest(path=work_david, filename='bointcrh.xls'):
     import pandas as pd
     df = pd.read_excel(path/filename, header=2, sheet_name='גיליון1')
