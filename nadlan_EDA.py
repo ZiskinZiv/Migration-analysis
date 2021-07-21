@@ -40,6 +40,19 @@ P2015_2_name = {1: 'Very Peripheral',
                 4: 'Centralized',
                 5: 'Very Centralized'}
 
+
+def convert_df_variable_names(df, path=work_david, drop=True):
+    import pandas as pd
+    vlist = pd.read_csv(path/'nadlan_database_variable_list.csv', header=None)
+    vlist.columns = ['old', 'new', 'final']
+    vlist['final'] = vlist['final'].fillna(vlist['new'])
+    vlist.set_index('old', inplace=True)
+    di = vlist['final'].to_dict()
+    df = df.rename(di, axis=1)
+    df = df[[x for x in df.columns if 'to_drop' not in x]]
+    return df
+
+
 def extract_JS_settelments_from_stat_areas(path=work_david, muni_path=muni_path):
     from cbs_procedures import read_statistical_areas_gis_file
     from cbs_procedures import read_bycode_city_data
@@ -342,7 +355,8 @@ def geolocate_nadlan_deals_within_city_or_rc(df, muni_path=muni_path,
 def load_nadlan_combined_deal(path=work_david, times=['1998Q1', '2021Q1'],
                               dealamount_iqr=2, return_XY=False, add_bgr='Total',
                               add_geo_layers=True, add_mean_salaries=True,
-                              add_neighborhood_uniq_code=True):
+                              add_neighborhood_uniq_code=True,
+                              fix_new_status=True):
     import pandas as pd
     from Migration_main import path_glob
     import geopandas as gpd
@@ -380,10 +394,11 @@ def load_nadlan_combined_deal(path=work_david, times=['1998Q1', '2021Q1'],
 
 
     file = path_glob(
-        path, 'Nadlan_deals_neighborhood_combined_processed_*.csv')
+        path, 'Nadlan_deals_neighborhood_combined_processed_*.csv')[0]
+    print(file)
     dtypes = {'FULLADRESS': 'object', 'Street': 'object', 'FLOORNO': float,
               'NEWPROJECTTEXT': bool, 'PROJECTNAME': 'object', 'DEALAMOUNT': float}
-    df = pd.read_csv(file[0], na_values='None', parse_dates=['DEALDATETIME'],
+    df = pd.read_csv(file, na_values='None', parse_dates=['DEALDATETIME'],
                      dtype=dtypes)
     # filter nans:
     df = df[~df['district'].isnull()]
@@ -439,6 +454,9 @@ def load_nadlan_combined_deal(path=work_david, times=['1998Q1', '2021Q1'],
             inds = df[df['Neighborhood']==name].index
             df.loc[inds, 'Neighborhood_code'] = uniq
         df = df.rename({'Neighborhood_code': 'Neighborhood_uniqid'}, axis=1)
+    if fix_new_status:
+        inds = df.loc[(~df['New']) &(df['NEWPROJECTTEXT']) &(df['BUILDINGYEAR'].isnull())].index
+        df.loc[inds, 'New'] = True
     return df
 
 
