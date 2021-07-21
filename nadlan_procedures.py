@@ -968,6 +968,7 @@ def get_all_city_codes_from_largest_to_smallest(path=work_david):
     from cbs_procedures import read_periphery_index
     dff = read_periphery_index(work_david)
     city_codes = dff.sort_values('Pop2015', ascending=False)
+    city_codes['NameHe'] = city_codes['NameHe'].str.replace('*','')
     return city_codes
 
 
@@ -1011,7 +1012,8 @@ def parse_one_json_nadlan_page_to_pandas(page, city_code=None,
 
 
 def produce_nadlan_rest_request(city='רעננה', street='אחוזה',
-                                just_neighborhoods=True):
+                                desc_filter='neighborhood'):
+    # desc_filter replaces just_neighborhoods:
     # full_address=None):
     """produce the body of nadlan deals request, also usfull for geolocations"""
     import requests
@@ -1026,9 +1028,15 @@ def produce_nadlan_rest_request(city='רעננה', street='אחוזה',
         raise ValueError('couldnt get a response.')
     # if body['ResultType'] != 1 and full_address is None:
     #     raise TypeError(body['ResultLable'])
-    if just_neighborhoods:
-        if body['DescLayerID'] != 'NEIGHBORHOODS_AREA':
-            raise TypeError('result is not a NEIGHBORHOOD!, skipping')
+    if desc_filter is not None:
+        if desc_filter == 'neighborhood':
+            desc = 'NEIGHBORHOODS_AREA'
+        elif desc_filter == 'city':
+            desc = 'SETL_MID_POINT'
+        elif desc_filter == 'address':
+            desc = 'ADDR_V1'
+        if body['DescLayerID'] != desc:
+            raise TypeError('result is not a {}!, skipping'.format(desc))
     if body['PageNo'] == 0:
         body['PageNo'] = 1
     return body
@@ -1681,7 +1689,7 @@ def parse_autocomplete_neighbors(json):
     return df
 
 
-def process_one_page_from_neighborhoods_search(result_page):
+def process_one_page_from_neighborhoods_or_settelment_search(result_page, desc='neighborhood'):
     """take one result page from post_nadlan_rest, specifically
     neighborhoods searchs and process it"""
     import pandas as pd
@@ -1694,7 +1702,7 @@ def process_one_page_from_neighborhoods_search(result_page):
         has_historic = row['TREND_FORMAT'] != ''
         if full_addr != '' and disp_addr != '':
             body = produce_nadlan_rest_request(*full_addr.split(','),
-                                               just_neighborhoods=False)
+                                               desc_filter='address')
             sleep_between(0.25, 0.35)
             df_extra = parse_body_request_to_dataframe(body)
             df.loc[i, 'ObjectID':'Street'] = df_extra.T[0]
@@ -1780,6 +1788,101 @@ def process_all_city_nadlan_neighborhood_search(savepath=work_david/'Nadlan_deal
             city_path, ndf, city_code=city_code, neighborhood_code=ncode)
     return
 
+
+def process_all_pages_for_nadlan_settelment_search(savepath, city_df, city_code=1247):
+    from Migration_main import path_glob
+    import pandas as pd
+    import os
+    import numpy as np
+    city = city_df.loc[city_code]['NameHe']
+    try:
+        page_files = path_glob(
+            savepath/'page_temp', 'Nadlan_deals_city_{}_settlement_*.csv'.format(city_code))
+        pages = [x.as_posix().split('/')[-1].split('.')[0].split('_')[-1]
+                 for x in page_files]
+        pages = sorted([int(x) for x in pages])
+        cnt = int(pages[-1]) + 1
+        print('last page found is {}, strating at {}.'.format(cnt-1, cnt))
+    except FileNotFoundError:
+        cnt = 1
+        pass
+    print('searching for {} settlement ({}).'.format(city, city_code))
+    body = produce_nadlan_rest_request(
+            city, street='', desc_filter='city')
+    body['PageNo'] = cnt
+    page_dfs = []
+    # cnt = 1
+    last_page = False
+    no_results = False
+    # check if cnt -1 is the last page in body:
+    b = body.copy()
+    b['PageNo'] = cnt - 1
+    try:
+        result = post_nadlan_rest(b)
+        if result['IsLastPage']:
+            last_page = True
+    except ValueError:
+        pass
+    while not last_page:
+        print('fetching nadlan deals in {}, page : {}'.format(city, cnt))
+        try:
+            result = post_nadlan_rest(body)
+        except TypeError:
+            no_results = True
+            return pd.DataFrame()
+        except ValueError:
+            no_results = True
+            # if cnt > 1:
+            # else:
+            # return pd.DataFrame()
+        if no_results and cnt > 1:
+            last_page = True
+        elif no_results and cnt == 1:
+            return pd.DataFrame()
+        filename = 'Nadlan_deals_city_{}_settlement_page_{}.csv'.format(
+            city_code, cnt)
+        df = process_one_page_from_neighborhoods_or_settelment_search(result, desc='city')
+        if not df['City'].value_counts().empty:
+            try:
+                vc_city = [x for x in df['City'].value_counts().index if x != ''][0]
+            except IndexError:
+                vc_city = city
+                pass
+            try:
+                assert vc_city == city
+                df.loc[:, 'City'] = city
+            except AssertionError:
+                df.loc[:, 'City'] = ''
+                pass
+        if not df.empty:
+            if not (savepath/'page_temp').is_dir():
+                os.mkdir(savepath/'page_temp')
+                print('{} was created.'.format(savepath/'page_temp'))
+            df.to_csv(savepath/'page_temp'/filename, na_rep='None', index=False)
+            print('Page {} was saved to {}.'.format(cnt, savepath))
+        page_dfs.append(df)
+        cnt += 1
+        if result['IsLastPage']:
+            last_page = True
+        else:
+            body['PageNo'] += 1
+        no_results = False
+    # now after finished, find all temp pages and concat them:
+    page_files = path_glob(
+        savepath/'page_temp', 'Nadlan_deals_city_{}_settlement_*.csv'.format(city_code))
+    page_dfs = [pd.read_csv(x, na_values=np.nan, parse_dates=[
+                            'DEALDATETIME']) for x in page_files]
+    df = pd.concat(page_dfs)
+    df = df.reset_index(drop=True)
+    df = df.sort_index()
+    if savepath is not None:
+        yrmin = df['DEALDATETIME'].min().year
+        yrmax = df['DEALDATETIME'].max().year
+        filename = 'Nadlan_deals_city_{}_settelment_{}-{}.csv'.format(
+            city_code, yrmin, yrmax)
+        df.to_csv(savepath/filename, na_rep='None', index=False)
+        print('{} was saved to {}.'.format(filename, savepath))
+    return df
 
 def process_all_pages_for_nadlan_neighborhood_search(savepath, city_ndf,
                                                      city_code=8700,
@@ -2096,7 +2199,8 @@ def validate_neighborhood_and_coords_for_all_cities(main_path=work_david/'Nadlan
     return
 
 
-def concat_validated_neighborhoods_for_all_cities(main_path=work_david/'Nadlan_deals_by_neighborhood'):
+def concat_validated_neighborhoods_for_all_cities(main_path=work_david/'Nadlan_deals_by_neighborhood',
+                                                  glob_str='_processed_neighborhood_'):
     from Migration_main import path_glob
     import pandas as pd
     import os
@@ -2111,7 +2215,7 @@ def concat_validated_neighborhoods_for_all_cities(main_path=work_david/'Nadlan_d
     for city_path, city_code in zip(folder_paths, city_codes):
         print('concatenating city code {}.'.format(city_code))
         files = path_glob(
-            city_path, 'Nadlan_deals_city_{}_processed_neighborhood_*.csv'.format(city_code), return_empty_list=True)
+            city_path, 'Nadlan_deals_city_{}{}*.csv'.format(city_code, glob_str), return_empty_list=True)
         dfs = [pd.read_csv(x, na_values='None') for x in files]
         df = pd.concat(dfs)
         cols = df.loc[:, 'Neighborhood':'Street'].columns
@@ -2210,13 +2314,20 @@ def process_combined_nadlan_deals_and_save(df, savepath=work_david):
         SEI_code = SEI_city[SEI_city['stat_code'] == stat_code]
         # print(stat_code)
         try:
-            df.loc[inds, 'SEI_value'] = SEI_code['index_value'].values[0]
-            df.loc[inds, 'SEI_rank'] = SEI_code['rank'].values[0]
-            df.loc[inds, 'SEI_cluster'] = SEI_code['cluster'].values[0]
+            df.loc[inds, 'SEI_value2017'] = SEI_code['index_value2017'].values[0]
+            df.loc[inds, 'SEI_value2015'] = SEI_code['index_value2015'].values[0]
+            df.loc[inds, 'SEI_rank2017'] = SEI_code['rank2017'].values[0]
+            df.loc[inds, 'SEI_cluster2017'] = SEI_code['cluster2017'].values[0]
+            df.loc[inds, 'SEI_rank2015'] = SEI_code['rank2015'].values[0]
+            df.loc[inds, 'SEI_cluster2015'] = SEI_code['cluster2015'].values[0]
         except IndexError:
-            df.loc[inds, 'SEI_value'] = np.nan
-            df.loc[inds, 'SEI_rank'] = np.nan
-            df.loc[inds, 'SEI_cluster'] = np.nan
+            df.loc[inds, 'SEI_value2017'] = np.nan
+            df.loc[inds, 'SEI_value2015'] = np.nan
+            df.loc[inds, 'SEI_rank2017'] = np.nan
+            df.loc[inds, 'SEI_cluster2017'] = np.nan
+            df.loc[inds, 'SEI_rank2015'] = np.nan
+            df.loc[inds, 'SEI_cluster2015'] = np.nan
+
     print('calculating more columns...')
     # calculate squared meters per room:
     df['M2_per_ROOM'] = df['DEALNATURE'] / df['ASSETROOMNUM']
