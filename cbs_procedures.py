@@ -119,6 +119,21 @@ def read_social_economic_index(path=work_david, return_stat=True):
     df.drop(df.tail(6).index, inplace=True)
     df.columns = ['muni_status', 'city_code', 'NameHe', 'NameEn', 'city_cluster2017', 'city_cluster2015',
                   'stat_code', 'pop2017', 'index_value2017', 'rank2017', 'cluster2017', 'cluster2015']
+    df = df.set_index(['city_code', 'stat_code'])
+    # add 2015 data:
+    df2015 = pd.read_excel(
+        path/'social_economic_index_statistical_areas_2015.xls',
+        skiprows=7)
+    df2015.drop(df2015.tail(3).index, inplace=True)
+    df2015.columns = ['city_code', 'NameHe', 'stat_code', 'pop2015',
+                      'index_value2015', 'rank2015', 'cluster2015', 'NameEn']
+    df2015 = df2015.set_index(['city_code', 'stat_code'])
+    df = pd.concat(
+        [df, df2015[['index_value2015', 'rank2015', 'pop2015']]], axis=1)
+    df = df.reset_index()
+    df['pop2015'] = pd.to_numeric(df['pop2015'])
+    df['cluster2015'] = pd.to_numeric(df['cluster2015'], errors='coerce')
+    df['muni_status'] = pd.to_numeric(df['muni_status'])
     # now, read cities and settelments within regional councils:
     dfm = pd.read_excel(
         path/'social_economic_index_local_muni_2017.xlsx',
@@ -355,16 +370,28 @@ def read_boi_mortgage(path=work_david, filename='pribmash.xls',
     return df
 
 
-def read_apts_sold(path=work_david, filename='Apts_sold_2021-07.xls'):
+def read_apts_sold(path=work_david, filename='Apts_sold_2021-07.xls',
+                   filename2='Total_apts_yearly_sales.xlsx'):
     import pandas as pd
     df = pd.read_excel(path/filename, skiprows=2)
     df.columns = ['trend', 'deseasonlized', 'original','month','year']
-    years = df.groupby('month')['year'].unique()[1]
-    groups=df.groupby('month').groups
-    for mnth, inds in groups.items():
-        print(len(years), len(inds))
-        df.loc[inds, 'year'] = years
-    return df
+    for ind, row in df.copy().iterrows():
+        if not pd.isnull(row['year']):
+            good_year = row['year']
+        df.at[ind, 'year'] = good_year
+    df['dt'] = df['year'].astype(int).astype(str) + '-' + df['month'].astype(str)
+    df['dt'] = pd.to_datetime(df['dt'], format='%Y-%m')
+    df = df.set_index('dt')
+    df = df.sort_index()
+    df1 = pd.read_excel(path/filename2,skiprows=18,na_values='--')    # years = df.groupby('month')['year'].unique()[1]
+    df1.columns = ['year', 'original2']
+    df1.set_index(pd.to_datetime(df1['year'], format='%Y'), inplace=True)
+    # df = pd.concat([df, df1], axis=1)
+    # groups=df.groupby('month').groups
+    # for mnth, inds in groups.items():
+        # print(len(years), len(inds))
+        # df.loc[inds, 'year'] = years
+    return df1, df
 
 
 def read_boi_interest(path=work_david, filename='bointcrh.xls'):
@@ -483,9 +510,26 @@ def read_cbs_main_indicies(start_date='1997-01', end_date=None,
     # df.columns = cols
     return ds
 
-
-def read_various_parameters(path=work_david, file='various_parameters.xlsx'):
+def read_yearly_inner_migration(path=work_david, filename='inner_migration_2015-2019_IL.xlsx'):
     import pandas as pd
+    years = [2015, 2016, 2017, 2018, 2019]
+    dfs = []
+    for year in years:
+        df = pd.read_excel(path/filename, sheet_name='{}'.format(year), skiprows=2)
+        df.columns = ['city_type_code', 'city_code', 'NameHe', 'inflow', 'outflow', 'net']
+        df['year'] = year
+        dfs.append(df)
+    df = pd.concat(dfs, axis=0)
+    return df
+
+def read_various_parameters(path=work_david, file='various_parameters.xlsx',
+                            add_flow_rate_index='Inflow'):
+    import pandas as pd
+    import numpy as np
     df = pd.read_excel(path / file)
     df = df.set_index('ID')
+    if add_flow_rate_index is not None:
+        df['{}_rate_index'.format(add_flow_rate_index)] = np.log(df['{}2019'.format(add_flow_rate_index)]/df['{}2014'.format(add_flow_rate_index)])
+        df.replace([np.inf, -np.inf], np.nan, inplace=True)
     return df
+
