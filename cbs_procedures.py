@@ -526,8 +526,10 @@ def read_various_parameters(path=work_david, file='various_parameters.xlsx',
                             add_flow_rate_index='Inflow'):
     import pandas as pd
     import numpy as np
+    import geopandas as gpd
     df = pd.read_excel(path / file)
     df = df.set_index('ID')
+    df = gpd.GeoDataFrame(df, geometry=gpd.points_from_xy(df['ITMX'], df['ITMY']))
     if add_flow_rate_index is not None:
         df['{}_rate_index'.format(add_flow_rate_index)] = np.log(df['{}2019'.format(add_flow_rate_index)]/df['{}2014'.format(add_flow_rate_index)])
         df.replace([np.inf, -np.inf], np.nan, inplace=True)
