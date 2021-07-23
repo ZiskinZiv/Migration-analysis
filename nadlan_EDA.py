@@ -326,37 +326,36 @@ def create_higher_group_category(df, existing_col='SEI_cluster', n_groups=2,
     return df
 
 
-def geolocate_nadlan_deals_within_city_or_rc(df, muni_path=muni_path,
-                                             savepath=work_david):
-    import geopandas as gpd
-    import pandas as pd
-    # run load_nadlan_combined_deal with return_XY and without add_geo_layers:
-    gdf = gpd.read_file(muni_path/'Municipal+J&S+Regional.shp')
-    print('geolocating nadlan deals within city or RC...')
-    total = gdf.index.size
-    keys = []
-    for i, row in gdf.iterrows():
-        print('index: {} / {}'.format(i, total))
-        within = df.geometry.within(row['geometry'])
-        if within.sum() == 0:
-            print('empty..')
-            continue
-        inds = df.loc[within].index
-        dff = pd.DataFrame(df.loc[inds, 'KEYVALUE'])
-        dff['muni_gdf_index'] = i
-        keys.append(dff)
-    filename = 'Muni_gdf_KEYVALUE_index.csv'
-    dff = pd.concat(keys, axis=0)
-    dff.to_csv(savepath/filename, na_rep='None')
-    print('Done!')
-    return dff
+# def geolocate_nadlan_deals_within_city_or_rc(df, muni_path=muni_path,
+#                                              savepath=work_david):
+#     import geopandas as gpd
+#     import pandas as pd
+#     # run load_nadlan_combined_deal with return_XY and without add_geo_layers:
+#     gdf = gpd.read_file(muni_path/'Municipal+J&S+Regional.shp')
+#     print('geolocating nadlan deals within city or RC...')
+#     total = gdf.index.size
+#     keys = []
+#     for i, row in gdf.iterrows():
+#         print('index: {} / {}'.format(i, total))
+#         within = df.geometry.within(row['geometry'])
+#         if within.sum() == 0:
+#             print('no deals found in {}'.format(row['NameHe']))
+#             continue
+#         inds = df.loc[within].index
+#         dff = pd.DataFrame(df.loc[inds, 'KEYVALUE'])
+#         dff['muni_gdf_index'] = i
+#         keys.append(dff)
+#     filename = 'Muni_gdf_KEYVALUE_index.csv'
+#     dff = pd.concat(keys, axis=0)
+#     dff.to_csv(savepath/filename, na_rep='None')
+#     print('Done!')
+#     return dff
 
 
 def load_nadlan_combined_deal(path=work_david, times=['1998Q1', '2021Q1'],
                               dealamount_iqr=2, return_XY=False, add_bgr='Total',
                               add_geo_layers=True, add_mean_salaries=True,
-                              add_neighborhood_uniq_code=True,
-                              fix_new_status=True):
+                              rename_vars=True, agg_rooms_345=True):
     import pandas as pd
     from Migration_main import path_glob
     import geopandas as gpd
@@ -401,7 +400,7 @@ def load_nadlan_combined_deal(path=work_david, times=['1998Q1', '2021Q1'],
     df = pd.read_csv(file, na_values='None', parse_dates=['DEALDATETIME'],
                      dtype=dtypes)
     # filter nans:
-    df = df[~df['district'].isnull()]
+    # df = df[~df['district'].isnull()]
     if times is not None:
         print('Slicing to times {} to {}.'.format(*times))
         # df = df[df['year'].isin(np.arange(years[0], years[1] + 1))]
@@ -413,12 +412,8 @@ def load_nadlan_combined_deal(path=work_david, times=['1998Q1', '2021Q1'],
         df = df[~df.groupby('year')['DEALAMOUNT'].apply(
             is_outlier, method='iqr', k=dealamount_iqr)]
     df = df.reset_index(drop=True)
-    print('loading gdf muni index...')
+    # print('loading gdf muni index...')
     df['P2015_cluster2'] = df['P2015_cluster'].map(P2015_2_dict)
-    gdf_index = pd.read_csv(path/'Muni_gdf_KEYVALUE_index.csv', na_values='None')
-    gdf_index = gdf_index.set_index('KEYVALUE')
-    di = gdf_index['muni_gdf_index'].to_dict()
-    df['gdf_muni_index'] = df['KEYVALUE'].map(di)
     if return_XY:
         inds = df[df['X'] == 0].index
         df.loc[inds, 'X'] = np.nan
@@ -427,6 +422,7 @@ def load_nadlan_combined_deal(path=work_david, times=['1998Q1', '2021Q1'],
         df = gpd.GeoDataFrame(
             df, geometry=gpd.points_from_xy(df['X'], df['Y']))
     if add_mean_salaries:
+        print('adding mean salaries.')
         sal = read_mean_salary()
         df = df.groupby('year').apply(add_mean_salary_func, sal)
         df['MSAL_per_ASSET'] = (df['DEALAMOUNT'] / df['mean_salary']).round()
@@ -444,19 +440,19 @@ def load_nadlan_combined_deal(path=work_david, times=['1998Q1', '2021Q1'],
         dis_df = gpd.read_file(path/'gis/muni_il/Israel_districts_incl_J&S.shp')
         df['district_code'] = df['district'].map(dis_dict)
         df = df.groupby('district_code').apply(add_district_area_func, dis_df)
-    if add_neighborhood_uniq_code:
-        print('adding neighborhood uniqid...')
-        sviva = pd.read_csv(
-            work_david/'Nadlan_neighborhoods_sviva_data.csv', na_values='None')
-        for i, row in sviva.iterrows():
-            name = row['NEIG_NAMEHE']
-            uniq = row['NEIG_UNIQ_ID']
-            inds = df[df['Neighborhood']==name].index
-            df.loc[inds, 'Neighborhood_code'] = uniq
-        df = df.rename({'Neighborhood_code': 'Neighborhood_uniqid'}, axis=1)
-    if fix_new_status:
-        inds = df.loc[(~df['New']) &(df['NEWPROJECTTEXT']) &(df['BUILDINGYEAR'].isnull())].index
-        df.loc[inds, 'New'] = True
+    if agg_rooms_345:
+        inds = df.loc[(df['ASSETROOMNUM']>=3) & (df['ASSETROOMNUM']<4)].index
+        df.loc[inds, 'Rooms_345'] = 3
+        inds = df.loc[(df['ASSETROOMNUM']>=4) & (df['ASSETROOMNUM']<5)].index
+        df.loc[inds, 'Rooms_345'] = 4
+        inds = df.loc[(df['ASSETROOMNUM']>=5) & (df['ASSETROOMNUM']<6)].index
+        df.loc[inds, 'Rooms_345'] = 5
+        df['Rooms_345'] = df['Rooms_345'].astype(pd.Int64Dtype()).astype('category')
+    if rename_vars:
+        print('renaming vars.')
+        var_names = pd.read_excel(path/'nadlan_database_variable_list.xls', header=None)
+        var_di = dict(zip(var_names[0], var_names[1]))
+        df = df.rename(var_di, axis=1)
     return df
 
 
@@ -972,21 +968,65 @@ def plot_room_number_deals(df, rooms_range=[2, 6]):
     return dff
 
 
-def plot_price_per_m2(df, n_boot=100, hue='SEI2_cluster', y='NIS_per_M2'):
-    import pandas as pd
+def plot_price_per_m2(df, x='Sale_year', y='Price_per_m2',
+                      n_boot=100, filter_price_iqr=2, remove_P2_cluster=1):
     import seaborn as sns
     import matplotlib.pyplot as plt
+    import numpy as np
+    import pandas as pd
     sns.set_theme(style='ticks', font_scale=1.5)
-    df = df[df['DEALNATUREDESCRIPTION'].isin(apts)]
-    df['Q'] = pd.to_datetime(df['YQ'])
-    fig, ax = plt.subplots(figsize=(15, 5))
-    sns.lineplot(data=df, x='Q', y=y, hue=hue,
-                 ci=95, n_boot=n_boot, palette='Set1', ax=ax)
+    df = df[df['Type_of_asset'].isin(apts)]
+    if filter_price_iqr is not None:
+        df = df[~df.groupby('Sale_year')['Price_per_m2'].apply(
+            is_outlier, method='iqr', k=filter_price_iqr)]
+    # rename, remove, etc:
+    if remove_P2_cluster is not None:
+        inds = df[df['P2015_cluster2']==remove_P2_cluster].index
+        df.loc[inds, 'P2015_cluster2'] = np.nan
+        hue_order = [x for x in reversed(P2015_2_name.values())][:-1]
+    else:
+        hue_order = [x for x in reversed(P2015_2_name.values())]
+    df['P2015_cluster2'] = df['P2015_cluster2'].map(P2015_2_name)
+    df['Rooms_345'] = df['Rooms_345'].astype(pd.Int64Dtype()).astype('category')
+    df = df.rename({'Rooms_345': 'Number of Rooms', 'P2015_cluster2': 'Periphery cluster'}, axis=1)
+    fig, ax = plt.subplots(figsize=(15, 7))
+    sns.lineplot(data=df, x=x, y=y, hue='Periphery cluster', style='Number of Rooms',
+                 ci=95, n_boot=n_boot, palette='viridis', ax=ax,
+                 hue_order=hue_order)
     ax.grid(True)
     ax.set_xlabel('')
-    ax.set_ylabel(r'Apartment price per m$^2$')
+    ax.set_ylabel(r'Median apartment price per m$^2$')
     fig.tight_layout()
     return
+
+
+def plot_price_per_m2_hist(df, years=[2009, 2020], filter_price_iqr=2,
+                           P2_cluster=5):
+    import seaborn as sns
+    # import matplotlib.pyplot as plt
+    sns.set_theme(style='ticks', font_scale=1.5)
+    df = df[df['Type_of_asset'].isin(apts)]
+    if filter_price_iqr is not None:
+        df = df[~df.groupby('Sale_year')['Price_per_m2'].apply(
+            is_outlier, method='iqr', k=filter_price_iqr)]
+    df1 = df[df['P2015_cluster2']==P2_cluster]
+    df1 = df1.rename({'Rooms_345': 'Number of Rooms', 'P2015_cluster2': 'Periphery cluster'}, axis=1)
+    df1 = df1.loc[(df['Sale_year']>=years[0])&(df['Sale_year']<=years[-1])]
+    fg = sns.displot(data=df1, x='Price_per_m2', hue='Number of Rooms',col='Sale_year',
+                     col_wrap=3, kde=True)
+    # ax.grid(True)
+    # ax.set_xlabel('')
+    # ax.set_ylabel(r'Median apartment price per m$^2$')
+    # fg.fig.tight_layout()
+    fg.set_titles('Sale Year = {col_name}')
+    fg.set_xlabels(r'Price per m$^2$')
+    fg.fig.subplots_adjust(top=0.938,
+                           bottom=0.077,
+                           left=0.057,
+                           right=0.845,
+                           hspace=0.211,
+                           wspace=0.073)
+    return fg
 
 
 def compare_kiryat_gat_israel_dealamount(df_kg, df_isr):
