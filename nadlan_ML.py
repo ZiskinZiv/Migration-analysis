@@ -16,7 +16,75 @@ features1 = ['FLOORNO', 'DEALNATURE', 'NEWPROJECTTEXT',
 
 features2 = ['FLOORNO', 'DEALNATURE', 'NEWPROJECTTEXT',
              'SEI_value', 'Ground', 'year', 'Building_Growth_Rate']
+apts = ['דירה', 'דירה בבית קומות']
+apts_more = apts + ["קוטג' דו משפחתי", "קוטג' חד משפחתי", "דירת גן","בית בודד", "דירת גג","דירת גג (פנטהאוז)"]
 
+
+def scale_df(df, scaler, cols=None):
+    import pandas as pd
+    print('using {} scaler.'.format(scaler.__repr__()))
+    if cols is None:
+        scaled_vals = scaler.fit_transform(df)
+        df_scaled = pd.DataFrame(scaled_vals)
+        df_scaled.columns = df.columns
+    else:
+        print('scaling only {} cols.'.format(cols))
+        df_sliced = df[cols]
+        scaled_vals = scaler.fit_transform(df_sliced)
+        df_scaled = pd.DataFrame(scaled_vals)
+        df_scaled.columns = cols
+        df_rest = df[[x for x in df.columns if x not in cols]]
+        df_scaled = pd.concat([df_scaled, df_rest], axis=1)
+        df_scaled = df_scaled[[x for x in df.columns]]
+    return df_scaled, scaler
+
+
+def produce_X_y(df, year=2015, y_name='Price', plot_Xcorr=True):
+    import seaborn as sns
+    from sklearn.preprocessing import LabelBinarizer
+    from sklearn.preprocessing import PowerTransformer
+    # from sklearn.preprocessing import StandardScaler
+    from sklearn.preprocessing import MinMaxScaler
+    import numpy as np
+    import pandas as pd
+    # first, subset for apts and year:
+    df = df[df['Type_of_asset'].isin(apts_more)]
+    df = df[df['Sale_year']==year]
+    # assume another_floor_1 is floor_number where floor_number=NaN:
+    floor1 = df.loc[(~df['Another_floor_1'].isnull())]['Another_floor_1']
+    df.loc[floor1.index, 'Floor_number'] = floor1.values
+    df.replace([np.inf, -np.inf], np.nan, inplace=True)
+    # now slice for the features:
+    y = df[y_name]
+    df = df[['Rooms_345', 'New', 'Floor_number', 'Periph_value', 'SEI_value_{}'.format(year), 'Inflow_rate_index']]
+    df = df.rename({'Rooms_345': 'Rooms', 'SEI_value_{}'.format(year): 'SEI_value', 'New': 'New_apartment'}, axis=1)
+    df = df.dropna()
+    df['Rooms'] = df['Rooms'].astype(int)
+    df['Floor_number'] = df['Floor_number'].astype(int)
+    df['New_apartment'] = df['New_apartment'].astype(int)
+    y = y.loc[df.index].reset_index(drop=True).dropna()
+    X = df.reset_index(drop=True).loc[y.index]
+    sns.heatmap(X.corr(), annot=True)
+    # do onhotencoding on rooms:
+    jobs_encoder = LabelBinarizer()
+    jobs_encoder.fit(X['Rooms'])
+    transformed = jobs_encoder.transform(X['Rooms'])
+    rooms = pd.DataFrame(transformed)
+    rooms.columns = ['3_Rooms', '4_Rooms', '5_Rooms']
+    X = pd.concat([X, rooms], axis=1)
+    X = X.drop(['Rooms'], axis=1)
+    # scale Floor numbers:
+    X['Floor_number'] = np.log(X['Floor_number']+1)
+    # finally, scale y to log10 and X to minmax 0-1:
+    Xscaler = MinMaxScaler()
+    #yscaler = MinMaxScaler()
+    # yscaler = PowerTransformer(method='yeo-johnson',standardize=True)
+    y_scaled = y.apply(np.log10)
+    # y_scaled = yscaler.fit_transform(y_scaled.values.reshape(-1,1))
+    y = pd.DataFrame(y_scaled, columns=[y_name])
+    X, scaler = scale_df(X, scaler=Xscaler)
+    y = y[y_name]
+    return X, y, Xscaler #, yscaler
 
 
 def nadlan_simple_ML(df, year=2000, model_name='RF', feats=features1):
@@ -49,11 +117,13 @@ def nadlan_simple_ML(df, year=2000, model_name='RF', feats=features1):
 def cross_validation(X, y, model_name='RF', n_splits=5, pgrid='light',
                      savepath=None, verbose=0, n_jobs=-1, year=None):
     from sklearn.model_selection import GridSearchCV
+    from sklearn.model_selection import KFold
+    cv = KFold(n_splits, shuffle=True, random_state=1)
     ml = ML_Classifier_Switcher()
     model = ml.pick_model(model_name, pgrid=pgrid)
     param_grid = ml.param_grid
     gr = GridSearchCV(model, scoring='r2', param_grid=param_grid,
-                      cv=n_splits, verbose=verbose, n_jobs=n_jobs)
+                      cv=cv, verbose=verbose, n_jobs=n_jobs)
     gr.fit(X, y)
     if savepath is not None:
         if year is not None:
@@ -74,6 +144,7 @@ def cross_validate_using_optimized_HP(X, y, estimator, model='RF', n_splits=5,
     from sklearn.model_selection import RepeatedKFold
     from sklearn.model_selection import LeaveOneGroupOut
     from sklearn.model_selection import GroupShuffleSplit
+    import pandas as pd
     # logo = LeaveOneGroupOut()
     # gss = GroupShuffleSplit(n_splits=20, test_size=0.1, random_state=1)
     # from sklearn.metrics import make_scorer
@@ -96,19 +167,20 @@ def cross_validate_using_optimized_HP(X, y, estimator, model='RF', n_splits=5,
     #     ml_model.set_params(**hp_params)
     print(estimator)
     # cv = TimeSeriesSplit(5)
-    # # cv = KFold(10, shuffle=True, random_state=1)
+    cv = KFold(n_splits, shuffle=True, random_state=1)
     # cv = RepeatedKFold(n_splits=n_splits, n_repeats=n_repeats,
     #                    random_state=1)
     # if strategy == 'LOGO-year':
     #     print('using LeaveOneGroupOut strategy.')
-    cvr = cross_validate(estimator, X, y, scoring=scorers, cv=n_splits)
+    cvr = cross_validate(estimator, X, y, scoring=scorers, cv=cv)
+    df = pd.DataFrame(cvr)
     # elif strategy == 'GSS-year':
     #     print('using GroupShuffleSplit strategy.')
     #     cvr = cross_validate(ml_model, X, y, scoring=scores_dict, cv=gss,
     #                          groups=groups)
     # else:
     #     cvr = cross_validate(ml_model, X, y, scoring=scores_dict, cv=cv)
-    return cvr
+    return df
 
 
 def save_gridsearchcv_object(GridSearchCV, savepath, filename):
@@ -132,51 +204,129 @@ def manual_cross_validation_for_RF_feature_importances(X, y, rf_model,
     # scores_dict = {s: s for s in scorers}
     print(rf_model)
     # cv = TimeSeriesSplit(5)
-    cv = KFold(5)  # , shuffle=False, random_state=42)
-    cv = RepeatedKFold(n_splits=n_splits, n_repeats=n_repeats,
-                       random_state=42)
+    # cv = KFold(5, shuffle=True, random_state=2)  # , shuffle=False, random_state=42)
+    if n_repeats is not None:
+        print('chose {} repeats'.format(n_repeats))
+        cv = RepeatedKFold(n_splits=n_splits, n_repeats=n_repeats,
+                           random_state=42)
+    else:
+        cv = KFold(n_splits, shuffle=True, random_state=42)  # , shuffle=False, random_state=42)
     fis = []
     for train_index, test_index in cv.split(X):
         # print("TRAIN:", train_index, "TEST:", test_index)
         X_train, X_test = X.iloc[train_index], X.iloc[test_index]
         y_train, y_test = y.iloc[train_index], y.iloc[test_index]
         rf_model.fit(X_train, y_train)
-        fis.append(rf_model.feature_importances_)
+        if hasattr(rf_model, 'feature_importances_'):
+            fis.append(rf_model.feature_importances_)
+            name = 'feature_importances'
+        elif hasattr(rf_model, 'coef_'):
+            fis.append(rf_model.coef_)
+            name = 'beta'
     fi = xr.DataArray(fis, dims=['repeats', 'regressor'])
     fi['repeats'] = np.arange(1, len(fis)+1)
     fi['regressor'] = X.columns
-    fi.name = 'feature_importances'
-    fi = sort_fi(fi)
+    fi.name = name
+    # fi = sort_fi(fi)
     return fi
 
 
-def sort_fi(fi):
-    fi_mean = fi.mean('repeats')
-    dff = fi_mean.to_dataframe().sort_values('feature_importances')
-    da = dff.to_xarray()['feature_importances']
-    fi = fi.sortby(da)
-    return fi
+def compare_ml_models_years(df, ml_path=ml_path, pgrid='light',
+                            model_name='RF', years=[2015, 2017]):
+    cvrs = []
+    fis = []
+    for year in years:
+        _, gr = load_HP_params_from_optimized_model(ml_path,
+                                                    pgrid=pgrid,
+                                                    model_name=model_name,
+                                                    year=year)
+        best = gr.best_estimator_
+        X, y, Xscaler = produce_X_y(df, year=year, y_name='Price')
+        cvr = cross_validate_using_optimized_HP(
+            X, y, best)
+        fi = manual_cross_validation_for_RF_feature_importances(X, y, best,
+                                                                n_repeats=20,
+                                                                n_splits=5)
+        cvrs.append(cvr)
+        fis.append(fi)
+
+    cvr = concat_categories(cvrs[0], cvrs[1])
+    beta = concat_categories(fis[0], fis[1])
+    return cvr, beta
 
 
-def plot_feature_importances(fi):
+# def sort_fi(fi):
+#     fi_mean = fi.mean('repeats')
+#     dff = fi_mean.to_dataframe().sort_values('feature_importances')
+#     da = dff.to_xarray()['feature_importances']
+#     fi = fi.sortby(da)
+#     return fi
+
+
+def concat_categories(da1, da2, cat1_val=2015, cat2_val=2017, cat_name='Sale_year'):
+    import xarray as xr
+    from nadlan_EDA import convert_da_to_long_form_df
+    import pandas as pd
+    if isinstance(da1, xr.DataArray):
+        df1 = convert_da_to_long_form_df(da1)
+
+        df2 = convert_da_to_long_form_df(da2)
+    else:
+        df1 = da1
+        df2 = da2
+    df1[cat_name] = cat1_val
+    df2[cat_name] = cat2_val
+    df = pd.concat([df1, df2], axis=0)
+    return df
+
+
+def plot_feature_importances(fi, year=2017, mode='beta'):
     import seaborn as sns
     import matplotlib.pyplot as plt
+    import pandas as pd
     from nadlan_EDA import convert_da_to_long_form_df
     sns.set_theme(style='ticks', font_scale=1.5)
     fig, ax = plt.subplots(figsize=(17, 5))
-    df = convert_da_to_long_form_df(fi, value_name='feature_importances')
-    df['feature_importances'] = df['feature_importances'] * 100
-    sns.barplot(data=df, x='feature_importances', y='regressor', ci='sd', ax=ax)
+    if not isinstance(fi, pd.DataFrame):
+        df = convert_da_to_long_form_df(fi, value_name='feature_importances')
+        if mode != 'beta':
+            df['feature_importances'] = df['feature_importances'] * 100
+        sns.barplot(data=df, x='feature_importances', y='regressor', ci='sd', ax=ax)
+    else:
+        if mode != 'beta':
+            fi['value'] = fi['value'] * 100
+        sns.barplot(data=fi, x='value', y='regressor', hue='Sale_year', ci='sd')
     ax.grid(True)
-    ax.set_xlabel('Feature Importances [%]')
+    if mode == 'beta':
+        ax.set_xlabel('Coefficiants')
+    else:
+        ax.set_xlabel('Feature Importances [%]')
     ax.set_ylabel('Regressors')
-    fig.suptitle('Year 2000')
+    if year is not None:
+        fig.suptitle('Year {}'.format(year))
     fig.tight_layout()
     return fig
 
 
-def get_HP_params_from_optimized_model(path, pgrid='light', year=2000,
-                                       model_name='RF', return_df=False, return_object=True):
+def plot_cvr(cvr, y='test_r2', x='Model'):
+    import seaborn as sns
+    import matplotlib.pyplot as plt
+    import pandas as pd
+    sns.set_theme(style='ticks', font_scale=1.5)
+    fig, ax = plt.subplots(figsize=(6, 6))
+    g = sns.barplot(data=cvr, x=x, y=y, hue='Sale_year', ci='sd')
+    # g.despine(left=True)
+    plt.legend(loc='upper left')
+    ax.grid(True)
+    ax.set_xlabel('Model')
+    ax.set_ylabel(r'R$^2$')
+    fig.tight_layout()
+    return fig
+
+
+
+def load_HP_params_from_optimized_model(path, pgrid='light', year=2000,
+                                        model_name='RF', return_df=False, return_object=True):
     import joblib
     from Migration_main import path_glob
     files = path_glob(path, 'GRSRCHCV_{}_*_{}_{}.pkl'.format(model_name, pgrid, year))
@@ -409,3 +559,16 @@ class ML_Classifier_Switcher(object):
     def MLR(self):
         from sklearn.linear_model import LinearRegression
         return LinearRegression(n_jobs=-1)
+
+
+    def Ridge(self):
+        from sklearn.linear_model import Ridge
+        import numpy as np
+        if self.pgrid == 'light':
+            self.param_grid = {'alpha': np.logspace(-5, 5, 11),
+                               'solver': ['auto', 'svd', 'sparse_cg', 'saga']}
+        elif self.pgrid == 'dense':
+            self.param_grid = {'alpha': np.logspace(-10, 10, 21),
+                               'solver': ['auto', 'svd', 'cholesky', 'lsqr', 'sparse_cg', 'sag', 'saga']}
+
+        return Ridge(normalize=False, random_state=1)
