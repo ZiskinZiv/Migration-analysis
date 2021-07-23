@@ -34,6 +34,8 @@ NEW SEARCH and PROCESS (search by NEIGHBORHOODs):
 # and get the precise coords and nieghborhood
 from MA_paths import work_david
 nadlan_path = work_david / 'Nadlan_deals'
+muni_path = work_david/'gis/muni_il'
+
 apts = ['דירה', 'דירה בבית קומות']
 
 intel_kiryat_gat = [31.599645, 34.785265]
@@ -2269,7 +2271,7 @@ def combine_both_nadlan_datasets(neighborhood_path=work_david/'Nadlan_deals_by_n
     return df
 
 
-def process_combined_nadlan_deals_and_save(df, savepath=work_david):
+def process_combined_nadlan_deals_and_save(df, savepath=work_david, muni_path=muni_path):
     """adding different indices, statistical code, etc...
     but first you need to fill in the missing X, Y from shape file.
     see docstrings at top of this file"""
@@ -2277,11 +2279,13 @@ def process_combined_nadlan_deals_and_save(df, savepath=work_david):
     from cbs_procedures import read_social_economic_index
     from cbs_procedures import read_periphery_index
     from cbs_procedures import read_bycode_city_data
+    from cbs_procedures import read_various_parameters
     import geopandas as gpd
     import numpy as np
     import pandas as pd
     print('adding statistics...')
     df = df.reset_index(drop=True)
+    df['DEALDATETIME'] = pd.to_datetime(df['DEALDATETIME'])
     # now convert to geodataframe using X and Y:
     df = gpd.GeoDataFrame(df, geometry=gpd.points_from_xy(df['X'], df['Y']))
     df.crs = {'init': 'epsg:2039'}
@@ -2300,7 +2304,7 @@ def process_combined_nadlan_deals_and_save(df, savepath=work_david):
         pop2019 = row['pop_total']
         df_city = df[df['city_code']==city_code]
         if df_city.empty:
-            print('{} settlement not found in deals, skipping...'.format(city_code))
+            print('{} ({}) settlement not found in deals, skipping...'.format(row['NameHe'], city_code))
             continue
         within = df_city.geometry.within(poly)
         inds = within[within].index
@@ -2327,6 +2331,19 @@ def process_combined_nadlan_deals_and_save(df, savepath=work_david):
             df.loc[inds, 'SEI_cluster2017'] = np.nan
             df.loc[inds, 'SEI_rank2015'] = np.nan
             df.loc[inds, 'SEI_cluster2015'] = np.nan
+    print('geolocating within muni shape file')
+    gdf = gpd.read_file(muni_path/'Municipal+J&S+Regional.shp')
+    print('geolocating nadlan deals within city or RC...')
+    total = gdf.index.size
+    for i, row in gdf.iterrows():
+        print('index: {} / {} ({})'.format(i, total, row['NameHe']))
+        within = df.geometry.within(row['geometry'])
+        if within.sum() == 0:
+            print('no deals found in {}'.format(row['NameHe']))
+            continue
+        inds = df.loc[within].index
+        # df.loc[inds, 'KEYVALUE']
+        df.loc[inds, 'muni_gdf_index'] = i
 
     print('calculating more columns...')
     # calculate squared meters per room:
@@ -2348,17 +2365,32 @@ def process_combined_nadlan_deals_and_save(df, savepath=work_david):
     df.loc[inds, 'NEWPROJECTTEXT'] = 1
     df['NEWPROJECTTEXT'] = pd.to_numeric(df['NEWPROJECTTEXT']).fillna(0)
     df['NEWPROJECTTEXT'] = df['NEWPROJECTTEXT'].astype(bool)
+    inds = df.loc[(~df['New']) &(df['NEWPROJECTTEXT']) &(df['BUILDINGYEAR'].isnull())].index
+    df.loc[inds, 'New'] = True
+    # fix some negiborhood issues:
+    df['Neighborhood']=df['Neighborhood'].str.replace('שכונת', '')
+    df['Neighborhood']=df['Neighborhood'].str.strip()
+    print('adding neighborhood uniqid...')
+    sviva = pd.read_csv(
+            work_david/'Nadlan_neighborhoods_sviva_data.csv', na_values='None')
+    for i, row in sviva.iterrows():
+        name = row['NEIG_NAMEHE']
+        uniq = row['NEIG_UNIQ_ID']
+        inds = df[df['Neighborhood']==name].index
+        df.loc[inds, 'Neighborhood_code'] = uniq
+    df = df.rename({'Neighborhood_code': 'Neighborhood_uniqid'}, axis=1)
+
     # try to guess ground floors apts.:
-    df['Ground'] = df['FLOORNO'].str.contains('קרקע')
+    # df['Ground'] = df['FLOORNO'].str.contains('קרקע')
     # add SEI2 cluster:
-    SEI_cluster = [x+1 for x in range(10)]
-    new = [SEI_cluster[i:i+2] for i in range(0, len(SEI_cluster), 2)]
-    SEI2 = {}
-    for i, item in enumerate(new):
-        SEI2[i+1] = new[i]
-        m = pd.Series(SEI2).explode().sort_values()
-        d = {x: y for (x, y) in zip(m.values, m.index)}
-        df['SEI2_cluster'] = df['SEI_cluster'].map(d)
+    # SEI_cluster = [x+1 for x in range(10)]
+    # new = [SEI_cluster[i:i+2] for i in range(0, len(SEI_cluster), 2)]
+    # SEI2 = {}
+    # for i, item in enumerate(new):
+    #     SEI2[i+1] = new[i]
+    #     m = pd.Series(SEI2).explode().sort_values()
+    #     d = {x: y for (x, y) in zip(m.values, m.index)}
+    #     df['SEI2_cluster'] = df['SEI_cluster'].map(d)
     # add peripheriy data:
     pdf = read_periphery_index()
     cols = ['TLV_proximity_value', 'TLV_proximity_rank', 'PAI_value',
@@ -2376,6 +2408,10 @@ def process_combined_nadlan_deals_and_save(df, savepath=work_david):
     bdf1 = pd.concat(series, axis=1)
     bdf1.columns = cols
     df = pd.concat([df, bdf1], axis=1)
+    # add migration rate:
+    v = read_various_parameters()
+    inflow_di = v[~v['Inflow_rate_index'].isnull()]['Inflow_rate_index'].to_dict()
+    df['Inflow_rate_index'] = df['city_code'].map(inflow_di)
     # add datetime attrs:
     df['year'] = df['DEALDATETIME'].dt.year
     df['month'] = df['DEALDATETIME'].dt.month
@@ -2384,10 +2420,17 @@ def process_combined_nadlan_deals_and_save(df, savepath=work_david):
     # finally try to parse floor numbers:
     floor_df = parse_floorno()
     floor_dict = dict(zip(floor_df['he'].values, floor_df['FLOORNO'].values))
+    floor1_dict = dict(zip(floor_df['he'].values, floor_df['More_floors_1'].values))
+    floor2_dict = dict(zip(floor_df['he'].values, floor_df['More_floors_2'].values))
+    floor_roof_dict = dict(zip(floor_df['he'].values, floor_df['Roof'].values))
+    floor_gnd_dict = dict(zip(floor_df['he'].values, floor_df['Ground'].values))
+    floor_base_dict = dict(zip(floor_df['he'].values, floor_df['Basement'].values))
+    df['FLOOR_1'] = df['FLOORNO'].map(floor1_dict)
+    df['FLOOR_2'] = df['FLOORNO'].map(floor2_dict)
+    df['ROOF'] = df['FLOORNO'].map(floor_roof_dict)
+    df['GROUND'] = df['FLOORNO'].map(floor_gnd_dict)
+    df['BASEMENT'] = df['FLOORNO'].map(floor_base_dict)
     df['FLOORNO'] = df['FLOORNO'].map(floor_dict)
-    # fix some negiborhood issues:
-    df['Neighborhood']=df['Neighborhood'].str.replace('שכונת', '')
-    df['Neighborhood']=df['Neighborhood'].str.strip()
     # try to fillin dealneaturedescription from agging the gush field
     print('filling DEALNATUREDESCRIPTION using value_counts on GUSH_ONLY')
     lot = [x[0] for x in df['GUSH'].str.split('-')]
