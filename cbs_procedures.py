@@ -12,6 +12,36 @@ Created on Tue May 11 11:44:45 2021
 # and get the precise coords and nieghborhood
 from MA_paths import work_david
 
+beniya_dict = {'Shana': 'שנה',
+               'geo_code': 'גאוקוד',
+               'geo_name': 'שם יישוב',
+               'beg_p_sum': 'התחלת בנייה סך הכל',
+               'beg_room_1_3': 'התחלת בנייה בדירות עד שלושה חדרים',
+               'beg_room_4_5': 'התחלת בנייה בדירות ארבעה וחמישה חדרים',
+               'beg_room_6_plus': 'התחלת בנייה בדירות 6 חדרים  ומעלה',
+               'beg_area_sum': 'התחלת בנייה סך שטח',
+               'beg_area_residence': 'התחלת בנייה שטח מגורים',
+               'beg_area_non_residence': 'התחלת בנייה שטח לא למגורים',
+               'beg_building_sum': 'התחלת בנייה סך הכל בבנינים',
+               'beg_building_1': 'התחלת בנייה דירות בבניני דירה אחת',
+               'beg_building_2_plus': 'התחלת בנייה דירות בבניני 2 דירות ומעלה',
+               'beg_floor_1_2': 'התחלת בנייה דירות בבנינים עד שתי קומות',
+               'beg_floor_3_plus': 'התחלת בנייה דירות בבניני  3 קומות ומעלה',
+               'fin_p_sum': 'גמר בנייה סך הכל',
+               'fin_room_1_3': 'גמר בנייה בדירות עד שלושה חדרים',
+               'fin_room_4_5': 'גמר בנייה בדירות ארבעה וחמישה חדרים',
+               'fin_room_6_plus': 'גמר בנייה בדירות 6 חדרים  ומעלה',
+               'fin_area_sum': 'גמר בנייה סכום שטח',
+               'fin_area_residence': 'גמר בנייה שטח מגורים',
+               'fin_area_non_residence': 'גמר בנייה שטח לא למגוריםce',
+               'fin_building_sum': 'גמר בנייה סך הכל בבנינים',
+               'fin_building_1': 'גמר בנייה דירות בבניני דירה אחת',
+               'fin_building_2_plus': 'גמר בנייה דירות בבניני 2 דירות ומעלה',
+               'fin_floor_1_2': 'גמר בנייה דירות בבנינים עד שתי קומות',
+               'fin_floor_3_plus': 'גמר בנייה דירות בבניני  3 קומות ומעלה',
+               'ESRI_OID': 'ESRI_OID',
+               'SHAPE.STArea()': 'SHAPE.STArea()',
+               'SHAPE.STLength()': 'SHAPE.STLength()'}
 
 def geo_location_settelments_israel(path=work_david):
     import pandas as pd
@@ -98,6 +128,175 @@ def plot_SEI_and_P2015(path=work_david):
     # g.plot_joint(sns.kdeplot, color="r", zorder=0, levels=6)
     # g.plot_marginals(sns.rugplot, color="r", height=-.15, clip_on=False)
     return g
+
+
+def read_historic_SEI(path=work_david):
+    import pandas as pd
+    import numpy as np
+    bycode = read_bycode_city_data(path)
+    muni_state = bycode['municipal_state'].astype(
+        pd.Int64Dtype()).astype('category').to_dict()
+    # 1995:
+    df1995 = pd.read_excel(path / 'SEI_LC_City_1995.xls', sheet_name='easy',
+                           header=0)
+    df1995.columns = ['NameEn', 'index', 'rank',
+                      'NameHe', 'cluster', 'city_code']
+    df1995['municipal_state'] = df1995['city_code'].map(muni_state)
+    df1995_rc = pd.read_excel(path/'SEI_RC_1995.xls', skiprows=11)
+    df1995_rc = df1995_rc.iloc[:, 0:6]
+    df1995_rc.columns = ['NameHe', 'index', 'rank',
+                         'cluster', 'population', 'municipal_state']
+    df1995 = pd.concat([df1995, df1995_rc], axis=0)
+    df1995['year'] = 1995
+    # 1999:
+    df1999 = pd.read_excel(path / 'SEI_LC_City_1999.xls', sheet_name='easy',
+                           header=5)
+    df1999.columns = ['city_code', 'NameEn',
+                      'index', 'rank', 'NameHe', 'cluster']
+    df1999['municipal_state'] = df1999['city_code'].map(muni_state)
+    df1999_rc = pd.read_excel(path / 'SEI_RC_1999.xls', sheet_name='easy',
+                              header=5)
+    df1999_rc.columns = ['municipal_state', 'NameEn',
+                         'index', 'rank', 'NameHe', 'cluster', 'RC_cluster']
+    df1999_rc = df1999_rc.drop('RC_cluster', axis=1)
+    df1999 = pd.concat([df1999, df1999_rc], axis=0)
+    df1999['year'] = 1999
+    # 2001:
+    df2001 = pd.read_excel(path / 'SEI_LC_City_2001.xls', sheet_name='easy',
+                           header=1)
+    df2001.columns = ['NameEn', 'index', 'rank',
+                      'NameHe', 'city_code', 'cluster']
+    df2001['municipal_state'] = df2001['city_code'].map(muni_state)
+    df2001_rc = pd.read_excel(path / 'SEI_RC_2001.xls', sheet_name='easy',
+                              header=5)
+    df2001_rc.columns = ['municipal_state', 'NameEn',
+                         'index', 'rank', 'NameHe', 'cluster']
+    df2001 = pd.concat([df2001, df2001_rc], axis=0)
+    df2001['year'] = 2001
+    # 2003:
+    df2003 = pd.read_excel(path / 'SEI_LC_City_2003.xls', sheet_name='easy',
+                           header=1)
+    df2003.columns = ['NameEn', 'index', 'rank',
+                      'NameHe', 'city_code', 'cluster']
+    df2003['municipal_state'] = df2003['city_code'].map(muni_state)
+    df2003_rc = pd.read_excel(path / 'SEI_RC_2003.xls', sheet_name='easy',
+                              header=3)
+    df2003_rc.columns = ['NameEn', 'index', 'rank',
+                         'NameHe', 'municipal_state', 'cluster']
+    df2003 = pd.concat([df2003, df2003_rc], axis=0)
+    df2003['year'] = 2003
+    # 2006:
+    df2006 = pd.read_excel(path / 'SEI_LC_City_2006.xls', sheet_name='easy',
+                           header=1)
+    df2006.columns = ['NameEn', 'index', 'rank',
+                      'NameHe', 'city_code', 'cluster']
+    df2006['municipal_state'] = df2006['city_code'].map(muni_state)
+    df2006_rc = pd.read_excel(path / 'SEI_RC_2006.xls', sheet_name='easy',
+                              header=3)
+    df2006_rc.columns = ['NameEn', 'index', 'rank',
+                         'NameHe', 'municipal_state', 'cluster']
+    df2006 = pd.concat([df2006, df2006_rc], axis=0)
+    df2006['year'] = 2006
+    # 2008:
+    df2008 = pd.read_excel(path / 'SEI_LC_City_2008.xls', header=6)
+    df2008.columns = ['municipal_state', 'city_code', 'NameHe', 'population', 'index',
+                      'rank', 'cluster', 'NameEn', 'combined_cluster_2006', 'change_cluster_2006']
+    df2008.drop(df2008.tail(2).index, axis=0, inplace=True)
+    df2008.drop(['combined_cluster_2006', 'change_cluster_2006'],
+                axis=1, inplace=True)
+    df2008['year'] = 2008
+    # 2013 from here on out, settelments in each RC are also indexed:
+    df2013 = pd.read_excel(path / 'SEI_LC_City_2013.xls', header=7)
+    df2013.columns = ['municipal_state', 'city_code', 'NameHe', 'population', 'index',
+                      'rank', 'cluster', 'index2008', 'cluster2008', 'cluster_diff', 'NameEn']
+    df2013.drop(df2013.tail(5).index, axis=0, inplace=True)
+    df2013.drop(['index2008', 'cluster2008', 'cluster_diff'],
+                axis=1, inplace=True)
+    df2013_rc = pd.read_excel(path / 'SEI_RC_2013.xls', header=7)
+    df2013_rc.columns = ['municipal_state', 'RC_NameHe', 'RC_NameEn', 'RC_population', 'RC_cluster',
+                         'city_code', 'NameHe', 'NameEn', 'locality_type', 'population', 'index', 'cluster']
+    df2013 = pd.concat([df2013, df2013_rc], axis=0)
+    df2013['year'] = 2013
+    # 2015, the RC file contains also the City/LCs:
+    # df2015 = pd.read_excel(path / 'SEI_LC_City_2015.xls', header=5)
+    # df2015.columns=['municipal_state', 'city_code', 'NameHe', 'population', 'index', 'rank', 'cluster', 'index2013', 'cluster2013', 'cluster_diff', 'NameEn']
+    # df2015.drop(df2015.tail(4).index, axis=0,inplace=True)
+    # df2015.drop(['index2013', 'cluster2013', 'cluster_diff'], axis=1, inplace=True)
+    df2015 = pd.read_excel(path / 'SEI_RC_2015.xls', header=6)
+    df2015.columns = ['municipal_state', 'RC_NameHe', 'RC_NameEn', 'city_code', 'NameHe',
+                      'NameEn', 'population', 'index', 'rank', 'cluster', 'cluster2013', 'cluster_diff']
+    df2015.drop(['cluster2013', 'cluster_diff'], axis=1, inplace=True)
+    df2015.drop(df2015.tail(7).index, axis=0, inplace=True)
+    df2015['year'] = 2015
+    # 2017:
+    df2017 = pd.read_excel(path / 'SEI_LC_City_2017.xls', header=5)
+    df2017.columns = ['municipal_state', 'city_code', 'NameHe', 'population', 'index',
+                      'rank', 'cluster', 'index2015', 'cluster2015', 'cluster_diff', 'NameEn']
+    df2017.drop(df2017.tail(4).index, axis=0, inplace=True)
+    df2017.drop(['index2015', 'cluster2015', 'cluster_diff'],
+                axis=1, inplace=True)
+    df2017_rc = pd.read_excel(path / 'SEI_RC_2017.xls', header=10)
+    df2017_rc.columns = ['municipal_state', 'RC_NameHe', 'RC_NameEn', 'RC_cluster', 'RC_cluster2015',
+                         'city_code', 'NameHe', 'NameEn', 'locality_type', 'population', 'index', 'rank', 'cluster', 'cluster2015']
+    df2017_rc.drop(['cluster2015', 'RC_cluster2015'], axis=1, inplace=True)
+    df2017_rc.drop(df2017_rc.tail(9).index, axis=0, inplace=True)
+    df2017 = pd.concat([df2017, df2017_rc], axis=0)
+    df2017['year'] = 2017
+    # now concat Cities and LCs only:
+    dfs = []
+    for data in [df1995, df1999, df2001, df2003, df2006, df2008, df2013, df2015, df2017]:
+        sliced = data.loc[(data['municipal_state'] == 0) |
+                          (data['municipal_state'] == 99)]
+        dfs.append(sliced)
+    df = pd.concat(dfs, axis=0)
+    df.drop(['RC_NameHe', 'RC_NameEn', 'RC_population',
+            'RC_cluster', 'locality_type'], axis=1, inplace=True)
+    df['cluster'] = df['cluster'].astype(int)
+    # now transform to time series and interpolate:
+    city_index = df.pivot_table(index=['year'], columns=[
+                                'city_code'], values='index')
+    city_index.columns = [int(x) for x in city_index.columns]
+    city_index = city_index.reindex(
+        np.arange(1995, 2018, 1)).interpolate('linear')
+    # city_cluster = df.pivot_table(index=['year'],columns=['city_code'], values='cluster')
+    # city_cluster.columns = [int(x) for x in city_cluster.columns]
+    # now concat RC index level only:
+    dfs = []
+    for data in [df1995, df1999, df2001, df2003, df2006, df2008, df2013, df2015, df2017]:
+        sliced = data.loc[(data['municipal_state'] != 0) &
+                          (data['municipal_state'] != 99)]
+        dfs.append(sliced)
+    df = pd.concat(dfs, axis=0)
+    df.drop(['RC_NameHe', 'RC_NameEn', 'RC_population',
+            'RC_cluster', 'locality_type'], axis=1, inplace=True)
+    df1 = df.reset_index(drop=True)
+    df = df1.loc[df1['city_code'].isnull()]
+    df = df[~df['municipal_state'].isnull()]
+    df['municipal_state'] = pd.to_numeric(
+        df['municipal_state'], errors='coerce').dropna()
+    df['cluster'] = df['cluster'].astype(int)
+    rc_index = df.pivot_table(index=['year'], columns=[
+                              'municipal_state'], values='index')
+    rc_index.columns = [int(x) for x in rc_index.columns]
+    # fix some unifications and disbanded RCs:
+    rc_index.loc[2006, 68:69] = rc_index.loc[2006, 67]
+    rc_index.loc[2008, 68:69] = rc_index.loc[2008, 67]
+    rc_index.drop([67, 24, 77], axis=1, inplace=True)
+    rc_index = rc_index.reindex(np.arange(1995, 2018, 1)).interpolate('linear')
+    # now get all settelments within RC:
+    df = df1.loc[~df1['city_code'].isnull()]
+    cc_index = df.pivot_table(index=['year'], columns=[
+                              'city_code'], values='index')
+    cc_index.columns = [int(x) for x in cc_index.columns]
+    cc_index = cc_index.reindex(np.arange(1995, 2018, 1)).interpolate('linear')
+    # now, loop over each city_code in each RC and fillna with mean RC index:
+    for rc in df2017_rc.municipal_state.unique():
+        ccs = df2017_rc[df2017_rc['municipal_state'] == rc]['city_code'].values
+        [cc_index.loc[:, x].fillna(
+            rc_index.loc[:, rc], inplace=True) for x in ccs]
+    # finally, concat cc_index to city_index:
+    df = pd.concat([cc_index, city_index], axis=1)
+    return df
 
 
 def read_social_economic_index(path=work_david, return_stat=True):
@@ -535,3 +734,31 @@ def read_various_parameters(path=work_david, file='various_parameters.xlsx',
         df.replace([np.inf, -np.inf], np.nan, inplace=True)
     return df
 
+
+def get_beniya_cities_from_year(year=2021):
+    import requests
+    url = 'https://gisportal.cbs.gov.il/arcgis/rest/services/BML/MapServer/5/query?f=json&where=(1%3D1)%20AND%20(Shana%20IN%20({}))&returnGeometry=false&spatialRel=esriSpatialRelIntersects&outFields=geo_name&returnDistinctValues=true&orderByFields=geo_name&outSR=2039&resultOffset=0&resultRecordCount=1000'.format(year)
+    r = requests.get(url)
+    result = r.json()
+    res_list = [result['features'][x]['attributes']['geo_name'] for x in range(len(result['features']))]
+    return res_list
+
+
+def get_beniya_data(year=2021, city='אליקים'):
+    import requests
+    url ='https://gisportal.cbs.gov.il/arcgis/rest/services/BML/MapServer/5/query?f=json&where=(Shana%20IN%20({}))%20AND%20(UPPER(geo_name)%20IN%20(%27{}%27))&returnGeometry=true&spatialRel=esriSpatialRelIntersects&outFields=Shana%2Cgeo_code%2Cgeo_name%2Cbeg_p_sum%2Cbeg_room_1_3%2Cbeg_room_4_5%2Cbeg_room_6_plus%2Cbeg_area_sum%2Cbeg_area_residence%2Cbeg_area_non_residence%2Cbeg_building_sum%2Cbeg_building_1%2Cbeg_building_2_plus%2Cbeg_floor_1_2%2Cbeg_floor_3_plus%2Cfin_p_sum%2Cfin_room_1_3%2Cfin_room_4_5%2Cfin_room_6_plus%2Cfin_area_sum%2Cfin_area_residence%2Cfin_area_non_residence%2Cfin_building_sum%2Cfin_building_1%2Cfin_building_2_plus%2Cfin_floor_1_2%2Cfin_floor_3_plus%2CESRI_OID%2CSHAPE.STArea()%2CSHAPE.STLength()&orderByFields=Shana%20DESC&outSR=2039&resultOffset=0&resultRecordCount=1000'.format(year, city)
+    r = requests.get(url)
+    result = r.json()
+    return result
+
+
+def parse_one_beniya_city_record(result):
+    import geopandas as gpd
+    from shapely.geometry import Polygon
+    gdf = gpd.GeoSeries(Polygon(result['features'][0]['geometry']['rings'][0]))
+    di = result['features'][0]['attributes']
+    for key, val in di.items():
+        gdf[key] = val
+    gdf = gdf.rename({0: 'geometry'})
+    # gdfresult['features'][0]['attributes'], geometry
+    return gdf
