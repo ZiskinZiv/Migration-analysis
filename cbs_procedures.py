@@ -762,3 +762,50 @@ def parse_one_beniya_city_record(result):
     gdf = gdf.rename({0: 'geometry'})
     # gdfresult['features'][0]['attributes'], geometry
     return gdf
+
+
+def read_kindergarten_coords(path=work_david):
+    import pandas as pd
+    import geopandas as gpd
+    df = pd.read_csv(path/'kindergarten.csv',encoding="cp1255")
+    gdf = gpd.GeoDataFrame(df, geometry=gpd.points_from_xy(df['X'], df['Y']))
+    return gdf
+
+
+def read_school_coords(path=work_david):
+    import pandas as pd
+    import geopandas as gpd
+    df = pd.read_csv(path/'schools.csv',encoding="cp1255")
+    gdf = gpd.GeoDataFrame(df, geometry=gpd.points_from_xy(df['X'], df['Y']))
+    return gdf
+
+
+def read_moe_mosadot(path=work_david):
+    import pandas as pd
+    import geopandas as gpd
+    df = pd.read_csv(path/'moe_mosdot_coordinates.csv')
+    gdf = gpd.GeoDataFrame(df, geometry=gpd.points_from_xy(df['ITM_X'], df['ITM_Y']))
+    return gdf
+
+
+
+def calculate_minimum_distance_between_two_gdfs(main_gdf, gdf_to_check, new_col='kindergarten'):
+    from shapely.geometry import MultiPoint
+    from shapely.ops import nearest_points
+    import numpy as np
+
+    def nearest_point_distance(point, points):
+        if not point.is_valid:
+            return np.nan
+        if point.x == 0 or point.y == 0:
+            return np.nan
+        p = nearest_points(point, points)
+        distance = p[0].distance(p[1])
+        return distance
+    new_col = 'distance_to_nearest_{}'.format(new_col)
+    pts = gdf_to_check.geometry.tolist()
+    pts = MultiPoint(pts)
+    main_gdf = main_gdf.reset_index(drop=True)
+    main_gdf[new_col] = main_gdf.apply(lambda x: nearest_point_distance(x.geometry, pts), axis=1)
+    return main_gdf
+
