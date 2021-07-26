@@ -511,7 +511,10 @@ def calculate_building_rates(bdf, phase='Begin', rooms='Total', fillna=True):
         da = da.resample(time='MS').asfreq().sel(time=slice('1996', '2020'))
         da = da.interpolate_na('time', method='linear')
         da = da.rolling(time=6, center=True).mean()
-    df = da.to_dataset('ID').to_dataframe()
+        df = da.to_dataset('ID').to_dataframe()
+    else:
+        df = da.to_dataset('ID').to_dataframe()
+        df.index = df.index.year
     return df
 
 
@@ -802,6 +805,7 @@ def calculate_minimum_distance_between_two_gdfs(main_gdf, gdf_to_check, new_col=
         p = nearest_points(point, points)
         distance = p[0].distance(p[1])
         return distance
+
     new_col = 'distance_to_nearest_{}'.format(new_col)
     pts = gdf_to_check.geometry.tolist()
     pts = MultiPoint(pts)
