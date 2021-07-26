@@ -353,8 +353,8 @@ def create_higher_group_category(df, existing_col='SEI_cluster', n_groups=2,
 
 
 def load_nadlan_combined_deal(path=work_david, times=['1998Q1', '2021Q1'],
-                              dealamount_iqr=2, return_XY=False, add_bgr='Total',
-                              add_geo_layers=True, add_mean_salaries=True,
+                              dealamount_iqr=2, return_XY=False, add_bgr=None,
+                              add_geo_layers=False, add_mean_salaries=False,
                               rename_vars=True, agg_rooms_345=True):
     import pandas as pd
     from Migration_main import path_glob
