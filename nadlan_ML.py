@@ -26,25 +26,47 @@ def prepare_features_and_save(path=work_david, savepath=None):
     from cbs_procedures import read_building_starts_ends
     from cbs_procedures import calculate_building_rates
     from Migration_main import path_glob
+    from cbs_procedures import calculate_minimum_distance_between_two_gdfs
     import numpy as np
     import pandas as pd
-    def add_bgr_func(grp, bgr, rooms='Total'):
+
+    def add_bgr_func(grp, bgr, name='3Rooms_starts'):
         import numpy as np
-        cc_as_str = str(grp['city_code'].unique()[0])
+        year = grp['Sale_year'].values[0]
+        cc = grp['city_code'].values[0]
         try:
-            gr = bgr.loc[cc_as_str][rooms]
+            gr = bgr.loc[year, str(cc)]
         except KeyError:
             gr = np.nan
-        grp['Building_Growth_Rate'] = gr
+        grp[name] = gr
         return grp
 
     df = load_nadlan_combined_deal(add_bgr=None, add_geo_layers=False, return_XY=True)
     # add distances to kindergarden, schools, building rates for each room type etc.
     print('Adding Building Growth rate.')
-    file = path_glob(path, 'Building_*_growth_rate_*.csv')[0]
-    bgr = pd.read_csv(file, na_values='None', index_col='ID')
-    df = df.groupby('city_code').apply(add_bgr_func, bgr)
-    df.loc[df['Building_Growth_Rate'] == 0] = np.nan
+    bdf = read_building_starts_ends()
+    for room in ['3rooms', '4rooms', '5rooms']:
+        room_begins = calculate_building_rates(bdf, phase='Begin', rooms=room, fillna=False)
+        room_ends = calculate_building_rates(bdf, phase='End', rooms=room, fillna=False)
+        df = df.groupby(['Sale_year', 'city_code']).apply(add_bgr_func, room_begins, name='{}_starts'.format(room))
+        df = df.groupby(['Sale_year', 'city_code']).apply(add_bgr_func, room_ends, name='{}_ends'.format(room))
+        df.loc[df['{}_starts'.format(room)] == 0] = np.nan
+        df.loc[df['{}_ends'.format(room)] == 0] = np.nan
+    print('Adding minmum distance to kindergartens.')
+    kinder = read_kindergarten_coords()
+    df = df.groupby('Sale_year').apply(calculate_minimum_distance_between_two_gdfs, kinder, 'kindergarten_distance')
+    df.index = df.index.droplevel(0)
+    df = df.reset_index(drop=True)
+    print('Adding minmum distance to schools.')
+    school = read_school_coords()
+    df = df.groupby('Sale_year').apply(calculate_minimum_distance_between_two_gdfs, school, 'school_distance'))
+    df.index = df.index.droplevel(0)
+    df = df.reset_index(drop=True)
+    print('Adding historic city-level SEI.')
+    sei = read_historic_SEI()
+    df = df.groupby(['Sale_year', 'city_code']).apply(add_bgr_func, sei, name='SEI')
+    # finally drop some cols so saving will not take a lot of space:
+    df = df.drop(['P2015_cluster2', 'Parcel_Lot', 'Sale_Y_Q', 'Sale_quarter', 'Sale_month', 'District_HE', 'SEI2_cluster', 'm2_per_room', 'StatArea_ID', 'Building', 'street_code', 'Street', 'ObjectID', 'TREND_FORMAT', 'TREND_IS_NEGATIVE', 'POLYGON_ID','YEARBUILT'], axis=1)
     if savepath is not None:
         filename = 'Nadaln_with_features.csv'
         df.to_csv(savepath/filename, na_rep='None', index=False)
