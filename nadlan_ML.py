@@ -7,9 +7,7 @@ Created on Fri Jul  2 15:41:04 2021
 """
 from MA_paths import work_david
 ml_path = work_david / 'ML'
-features = ['ASSETROOMNUM', 'FLOORNO', 'DEALNATURE', 'NEWPROJECTTEXT',
-            'BUILDINGYEAR', 'BUILDINGFLOORS', 'SEI_value', 'New', 'Ground',
-            'TLV_proximity_value', 'PAI_value', 'P2015_value', 'year','Building_Growth_Rate']
+features = ['Rooms', 'Floor_number', 'Area_m2', 'Is_New_Project', 'Year_Built', 'Floors_In_Building', 'SEI_value_2017', 'SEI_value_2015', 'm2_per_room', 'Price_per_m2', 'Age', 'New', 'Periph_value', 'Inflow_rate_index', 'Sale_year', 'Rooms_345']
 
 features1 = ['FLOORNO', 'DEALNATURE', 'NEWPROJECTTEXT',
              'BUILDINGYEAR',  'SEI_value', 'Ground', 'P2015_value', 'year', 'Building_Growth_Rate']
@@ -18,6 +16,50 @@ features2 = ['FLOORNO', 'DEALNATURE', 'NEWPROJECTTEXT',
              'SEI_value', 'Ground', 'year', 'Building_Growth_Rate']
 apts = ['דירה', 'דירה בבית קומות']
 apts_more = apts + ["קוטג' דו משפחתי", "קוטג' חד משפחתי", "דירת גן","בית בודד", "דירת גג","דירת גג (פנטהאוז)"]
+
+
+def prepare_features_and_save(path=work_david, savepath=None):
+    from nadlan_EDA import load_nadlan_combined_deal
+    from cbs_procedures import read_school_coords
+    from cbs_procedures import read_kindergarten_coords
+    from cbs_procedures import read_historic_SEI
+    from cbs_procedures import read_building_starts_ends
+    from cbs_procedures import calculate_building_rates
+    from Migration_main import path_glob
+    import numpy as np
+    import pandas as pd
+    def add_bgr_func(grp, bgr, rooms='Total'):
+        import numpy as np
+        cc_as_str = str(grp['city_code'].unique()[0])
+        try:
+            gr = bgr.loc[cc_as_str][rooms]
+        except KeyError:
+            gr = np.nan
+        grp['Building_Growth_Rate'] = gr
+        return grp
+
+    df = load_nadlan_combined_deal(add_bgr=None, add_geo_layers=False, return_XY=True)
+    # add distances to kindergarden, schools, building rates for each room type etc.
+    print('Adding Building Growth rate.')
+    file = path_glob(path, 'Building_*_growth_rate_*.csv')[0]
+    bgr = pd.read_csv(file, na_values='None', index_col='ID')
+    df = df.groupby('city_code').apply(add_bgr_func, bgr)
+    df.loc[df['Building_Growth_Rate'] == 0] = np.nan
+    if savepath is not None:
+        filename = 'Nadaln_with_features.csv'
+        df.to_csv(savepath/filename, na_rep='None', index=False)
+        print('{} was saved to {}.'.format(filename, savepath))
+    return df
+
+
+def calc_vif(X):
+    import pandas as pd
+    from statsmodels.stats.outliers_influence import variance_inflation_factor
+    # Calculating VIF
+    vif = pd.DataFrame()
+    vif["variables"] = X.columns
+    vif["VIF"] = [variance_inflation_factor(X.values, i) for i in range(X.shape[1])]
+    return(vif)
 
 
 def scale_df(df, scaler, cols=None):
