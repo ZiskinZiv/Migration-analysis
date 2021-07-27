@@ -206,6 +206,22 @@ def run_MLR_on_all_years(df):
     return ds
 
 
+def run_CV_on_all_years(df, model_name='RF', savepath=ml_path):
+    import numpy as np
+    import xarray as xr
+    from sklearn.feature_selection import f_regression
+    years = np.arange(2000, 2020, 1)
+    for year in years:
+        X, y, scaler = produce_X_y(df, year=year, y_name='Price', plot_Xcorr=False,
+                                   feats=features, dummy=None, scale_X=False)
+        # ml = ML_Classifier_Switcher()
+        # model = ml.pick_model(model_name)
+        cross_validation(X, y, model_name=model_name, n_splits=5, pgrid='light',
+                         savepath=savepath, verbose=0, n_jobs=-1, year=year)
+
+    return
+
+
 def produce_X_y(df, year=2015, y_name='Price', plot_Xcorr=True,
                 feats=features, dummy='Rooms_345', scale_X=True):
     import seaborn as sns
