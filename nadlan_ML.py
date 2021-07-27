@@ -7,7 +7,9 @@ Created on Fri Jul  2 15:41:04 2021
 """
 from MA_paths import work_david
 ml_path = work_david / 'ML'
-features = ['Rooms', 'Floor_number', 'Area_m2', 'Is_New_Project', 'Year_Built', 'Floors_In_Building', 'SEI_value_2017', 'SEI_value_2015', 'm2_per_room', 'Price_per_m2', 'Age', 'New', 'Periph_value', 'Inflow_rate_index', 'Sale_year', 'Rooms_345']
+features = ['Floor_number', 'SEI', 'New', 'Periph_value', 'Sale_year', 'Rooms_345',
+            'distance_to_nearest_kindergarten', 'distance_to_nearest_school'
+            ,'Total_ends']
 
 features1 = ['FLOORNO', 'DEALNATURE', 'NEWPROJECTTEXT',
              'BUILDINGYEAR',  'SEI_value', 'Ground', 'P2015_value', 'year', 'Building_Growth_Rate']
@@ -15,7 +17,40 @@ features1 = ['FLOORNO', 'DEALNATURE', 'NEWPROJECTTEXT',
 features2 = ['FLOORNO', 'DEALNATURE', 'NEWPROJECTTEXT',
              'SEI_value', 'Ground', 'year', 'Building_Growth_Rate']
 apts = ['דירה', 'דירה בבית קומות']
-apts_more = apts + ["קוטג' דו משפחתי", "קוטג' חד משפחתי", "דירת גן","בית בודד", "דירת גג","דירת גג (פנטהאוז)"]
+apts_more = apts + ["קוטג' דו משפחתי", "קוטג' חד משפחתי",
+                    "דירת גן", "בית בודד", "דירת גג", "דירת גג (פנטהאוז)"]
+
+
+def create_total_inout_timeseries_from_migration_network_and_cbs():
+    from cbs_procedures import read_yearly_inner_migration
+    from Migration_main import read_all_multi_year_gpickles
+    from Migration_main import produce_nodes_time_series
+    Gs = read_all_multi_year_gpickles()
+    da = produce_nodes_time_series(Gs)
+    df_in = da.sel(parameter='total_in').reset_coords(
+        drop=True).to_dataset('node').to_dataframe()
+    df_out = da.sel(parameter='total_out').reset_coords(
+        drop=True).to_dataset('node').to_dataframe()
+    df = read_yearly_inner_migration()
+    inflow = df[df['year'] == 2018][[
+        'city_code', 'inflow']].set_index('city_code').T
+    inflow = inflow.append(
+        df[df['year'] == 2019][['city_code', 'inflow']].set_index('city_code').T)
+    inflow.index = [2018, 2019]
+    inflow.index.name = 'time'
+    inflow.columns.name = ''
+    inflow.columns = [str(x) for x in inflow.columns]
+    outflow = df[df['year'] == 2018][[
+        'city_code', 'outflow']].set_index('city_code').T
+    outflow = outflow.append(
+        df[df['year'] == 2019][['city_code', 'outflow']].set_index('city_code').T)
+    outflow.index = [2018, 2019]
+    outflow.index.name = 'time'
+    outflow.columns.name = ''
+    outflow.columns = [str(x) for x in outflow.columns]
+    df_in = df_in.append(inflow)
+    df_out = df_out.append(outflow)
+    return df_in, df_out
 
 
 def prepare_features_and_save(path=work_david, savepath=None):
@@ -31,42 +66,61 @@ def prepare_features_and_save(path=work_david, savepath=None):
     import pandas as pd
 
     def add_bgr_func(grp, bgr, name='3Rooms_starts'):
-        import numpy as np
-        year = grp['Sale_year'].values[0]
-        cc = grp['city_code'].values[0]
+        # import numpy as np
+        year = grp['Sale_year'].unique()[0]
+        cc = grp['city_code'].unique()[0]
         try:
-            gr = bgr.loc[year, str(cc)]
+            if bgr.columns.dtype == 'object':
+                gr = bgr.loc[year, str(cc)]
+            elif bgr.columns.dtype == 'int':
+                gr = bgr.loc[year, cc]
         except KeyError:
             gr = np.nan
         grp[name] = gr
         return grp
 
-    df = load_nadlan_combined_deal(add_bgr=None, add_geo_layers=False, return_XY=True)
+    df = load_nadlan_combined_deal(
+        add_bgr=None, add_geo_layers=False, return_XY=True)
     # add distances to kindergarden, schools, building rates for each room type etc.
     print('Adding Building Growth rate.')
     bdf = read_building_starts_ends()
-    for room in ['3rooms', '4rooms', '5rooms']:
-        room_begins = calculate_building_rates(bdf, phase='Begin', rooms=room, fillna=False)
-        room_ends = calculate_building_rates(bdf, phase='End', rooms=room, fillna=False)
-        df = df.groupby(['Sale_year', 'city_code']).apply(add_bgr_func, room_begins, name='{}_starts'.format(room))
-        df = df.groupby(['Sale_year', 'city_code']).apply(add_bgr_func, room_ends, name='{}_ends'.format(room))
-        df.loc[df['{}_starts'.format(room)] == 0] = np.nan
-        df.loc[df['{}_ends'.format(room)] == 0] = np.nan
-    print('Adding minmum distance to kindergartens.')
+    for room in ['3rooms', '4rooms', '5rooms', 'Total']:
+        room_begins = calculate_building_rates(
+            bdf, phase='Begin', rooms=room, fillna=False)
+        room_ends = calculate_building_rates(
+            bdf, phase='End', rooms=room, fillna=False)
+        df = df.groupby(['Sale_year', 'city_code']).apply(
+            add_bgr_func, room_begins, name='{}_starts'.format(room))
+        df = df.groupby(['Sale_year', 'city_code']).apply(
+            add_bgr_func, room_ends, name='{}_ends'.format(room))
+        # df.loc[df['{}_starts'.format(room)] == 0] = np.nan
+        # df.loc[df['{}_ends'.format(room)] == 0] = np.nan
+    print('Adding minimum distance to kindergartens.')
     kinder = read_kindergarten_coords()
-    df = df.groupby('Sale_year').apply(calculate_minimum_distance_between_two_gdfs, kinder, 'kindergarten_distance')
+    df = df.groupby('Sale_year').apply(
+        calculate_minimum_distance_between_two_gdfs, kinder, 'kindergarten')
     df.index = df.index.droplevel(0)
     df = df.reset_index(drop=True)
-    print('Adding minmum distance to schools.')
+    print('Adding minimum distance to schools.')
     school = read_school_coords()
-    df = df.groupby('Sale_year').apply(calculate_minimum_distance_between_two_gdfs, school, 'school_distance'))
+    df = df.groupby('Sale_year').apply(
+        calculate_minimum_distance_between_two_gdfs, school, 'school')
     df.index = df.index.droplevel(0)
     df = df.reset_index(drop=True)
     print('Adding historic city-level SEI.')
     sei = read_historic_SEI()
-    df = df.groupby(['Sale_year', 'city_code']).apply(add_bgr_func, sei, name='SEI')
+    sei.loc[2018] = sei.loc[2017]
+    sei.loc[2019] = sei.loc[2017]
+    df = df.groupby(['Sale_year', 'city_code']).apply(
+        add_bgr_func, sei, name='SEI')
+    # add inflow and outflow:
+    print('Adding Inflow and Outflow')
+    dfi, dfo = create_total_inout_timeseries_from_migration_network_and_cbs()
+    df = df.groupby(['Sale_year', 'city_code']).apply(add_bgr_func, dfi, name='Inflow')
+    df = df.groupby(['Sale_year', 'city_code']).apply(add_bgr_func, dfo, name='Outflow')
     # finally drop some cols so saving will not take a lot of space:
-    df = df.drop(['P2015_cluster2', 'Parcel_Lot', 'Sale_Y_Q', 'Sale_quarter', 'Sale_month', 'District_HE', 'SEI2_cluster', 'm2_per_room', 'StatArea_ID', 'Building', 'street_code', 'Street', 'ObjectID', 'TREND_FORMAT', 'TREND_IS_NEGATIVE', 'POLYGON_ID','YEARBUILT'], axis=1)
+    df = df.drop(['P2015_cluster2', 'Parcel_Lot', 'Sale_Y_Q', 'Sale_quarter', 'Sale_month', 'District_HE', 'm2_per_room',
+                  'StatArea_ID', 'Building', 'street_code', 'Street', 'ObjectID', 'TREND_FORMAT', 'TREND_IS_NEGATIVE', 'POLYGON_ID'], axis=1)
     if savepath is not None:
         filename = 'Nadaln_with_features.csv'
         df.to_csv(savepath/filename, na_rep='None', index=False)
@@ -74,13 +128,20 @@ def prepare_features_and_save(path=work_david, savepath=None):
     return df
 
 
-def calc_vif(X):
+def calc_vif(X, dropna=True, asfloat=True):
     import pandas as pd
     from statsmodels.stats.outliers_influence import variance_inflation_factor
+    if dropna:
+        print('dropping na.')
+        X = X.dropna()
+    if asfloat:
+        print('considering as float.')
+        X = X.astype(float)
     # Calculating VIF
     vif = pd.DataFrame()
     vif["variables"] = X.columns
-    vif["VIF"] = [variance_inflation_factor(X.values, i) for i in range(X.shape[1])]
+    vif["VIF"] = [variance_inflation_factor(
+        X.values, i) for i in range(X.shape[1])]
     return(vif)
 
 
@@ -103,7 +164,50 @@ def scale_df(df, scaler, cols=None):
     return df_scaled, scaler
 
 
-def produce_X_y(df, year=2015, y_name='Price', plot_Xcorr=True):
+def load_nadlan_with_features(path=work_david, years=[2000, 2019], asset_type=apts):
+    import pandas as pd
+    df = pd.read_csv(path/'Nadaln_with_features.csv', na_values='None')
+    print('sclicing to {} - {}.'.format(years[0], years[1]))
+    df = df.loc[(df['Sale_year']>=years[0])&(df['Sale_year']<=years[1])]
+    print('choosing {} only.'.format(asset_type))
+    df = df[df['Type_of_asset'].isin(asset_type)]
+    print('adding to floor number.')
+    floor1 = df.loc[(~df['Another_floor_1'].isnull())]['Another_floor_1']
+    df.loc[floor1.index, 'Floor_number'] = floor1.values
+    return df
+
+
+def run_MLR_on_all_years(df):
+    import numpy as np
+    import xarray as xr
+    from sklearn.feature_selection import f_regression
+    years = np.arange(2000, 2020, 1)
+    das = []
+    for year in years:
+        X, y, scaler = produce_X_y(df, year=year, y_name='Price', plot_Xcorr=False,
+                                   feats=features, dummy='Rooms_345', scale_X=True)
+        ml = ML_Classifier_Switcher()
+        mlr = ml.pick_model('MLR')
+        mlr.fit(X, y)
+        score = mlr.score(X, y)
+        _, pval = f_regression(X, y)
+        beta = mlr.coef_
+        beta_da = xr.DataArray(beta, dims=['regressor'])
+        beta_da.name = 'beta'
+        pval_da = xr.DataArray(pval, dims=['regressor'])
+        pval_da.name = 'pvalues'
+        r2_da = xr.DataArray(score)
+        r2_da.name = 'r2_score'
+        ds = xr.merge([beta_da, pval_da, r2_da])
+        ds['regressor'] = X.columns
+        das.append(ds)
+    ds = xr.concat(das, 'year')
+    ds['year'] = years
+    return ds
+
+
+def produce_X_y(df, year=2015, y_name='Price', plot_Xcorr=True,
+                feats=features, dummy='Rooms_345', scale_X=True):
     import seaborn as sns
     from sklearn.preprocessing import LabelBinarizer
     from sklearn.preprocessing import PowerTransformer
@@ -111,34 +215,42 @@ def produce_X_y(df, year=2015, y_name='Price', plot_Xcorr=True):
     from sklearn.preprocessing import MinMaxScaler
     import numpy as np
     import pandas as pd
-    # first, subset for apts and year:
-    df = df[df['Type_of_asset'].isin(apts_more)]
-    df = df[df['Sale_year']==year]
-    # assume another_floor_1 is floor_number where floor_number=NaN:
-    floor1 = df.loc[(~df['Another_floor_1'].isnull())]['Another_floor_1']
-    df.loc[floor1.index, 'Floor_number'] = floor1.values
-    df.replace([np.inf, -np.inf], np.nan, inplace=True)
+    # first, subset for year:
+    # df = df[df['Type_of_asset'].isin(apts_more)]
+    df = df[df['Sale_year'] == year]
     # now slice for the features:
-    y = df[y_name]
-    df = df[['Rooms_345', 'New', 'Floor_number', 'Periph_value', 'SEI_value_{}'.format(year), 'Inflow_rate_index']]
-    df = df.rename({'Rooms_345': 'Rooms', 'SEI_value_{}'.format(year): 'SEI_value', 'New': 'New_apartment'}, axis=1)
-    df = df.dropna()
-    df['Rooms'] = df['Rooms'].astype(int)
-    df['Floor_number'] = df['Floor_number'].astype(int)
-    df['New_apartment'] = df['New_apartment'].astype(int)
-    y = y.loc[df.index].reset_index(drop=True).dropna()
-    X = df.reset_index(drop=True).loc[y.index]
-    sns.heatmap(X.corr(), annot=True)
+    if feats is not None:
+        print('picking {} as features.'.format(feats))
+        X = df[feats].dropna()
+        X.drop('Sale_year', axis=1, inplace=True)
+    y = df.loc[X.index, y_name]
+    X = X.reset_index(drop=True)
+    if 'New' in X.columns:
+        X['New'] = X['New'].astype(int)
+    y = y.reset_index(drop=True)
+    # df['Rooms'] = df['Rooms'].astype(int)
+    # df['Floor_number'] = df['Floor_number'].astype(int)
+    # df['New_apartment'] = df['New_apartment'].astype(int)
+    if plot_Xcorr:
+        sns.heatmap(X.corr(), annot=True)
+    X['Rooms_345'] = X['Rooms_345'].astype(int)
     # do onhotencoding on rooms:
-    jobs_encoder = LabelBinarizer()
-    jobs_encoder.fit(X['Rooms'])
-    transformed = jobs_encoder.transform(X['Rooms'])
-    rooms = pd.DataFrame(transformed)
-    rooms.columns = ['3_Rooms', '4_Rooms', '5_Rooms']
-    X = pd.concat([X, rooms], axis=1)
-    X = X.drop(['Rooms'], axis=1)
+    # jobs_encoder = LabelBinarizer()
+    # jobs_encoder.fit(X['Rooms_345'])
+    # transformed = jobs_encoder.transform(X['Rooms_345'])
+    # rooms = pd.DataFrame(transformed)
+    # rooms.columns = ['3_Rooms', '4_Rooms', '5_Rooms']
+    if dummy is not None:
+        prefix = dummy.split('_')[0]
+        rooms = pd.get_dummies(data=X[dummy], prefix=prefix)
+        # drop one col from one-hot encoding not to fall into dummy trap!:
+        X = pd.concat([X, rooms.drop('Rooms_4', axis=1)], axis=1)
+        X = X.drop([dummy], axis=1)
     # scale Floor numbers:
     X['Floor_number'] = np.log(X['Floor_number']+1)
+    X['distance_to_nearest_kindergarten'] = np.log(X['distance_to_nearest_kindergarten'])
+    X['distance_to_nearest_school'] = np.log(X['distance_to_nearest_school'])
+    # X['Year_Built'] = np.log(X['Year_Built'])
     # finally, scale y to log10 and X to minmax 0-1:
     Xscaler = MinMaxScaler()
     #yscaler = MinMaxScaler()
@@ -146,9 +258,10 @@ def produce_X_y(df, year=2015, y_name='Price', plot_Xcorr=True):
     y_scaled = y.apply(np.log10)
     # y_scaled = yscaler.fit_transform(y_scaled.values.reshape(-1,1))
     y = pd.DataFrame(y_scaled, columns=[y_name])
-    X, scaler = scale_df(X, scaler=Xscaler)
+    if scale_X:
+        X, scaler = scale_df(X, scaler=Xscaler)
     y = y[y_name]
-    return X, y, Xscaler #, yscaler
+    return X, y, Xscaler  # , yscaler
 
 
 def nadlan_simple_ML(df, year=2000, model_name='RF', feats=features1):
@@ -274,7 +387,8 @@ def manual_cross_validation_for_RF_feature_importances(X, y, rf_model,
         cv = RepeatedKFold(n_splits=n_splits, n_repeats=n_repeats,
                            random_state=42)
     else:
-        cv = KFold(n_splits, shuffle=True, random_state=42)  # , shuffle=False, random_state=42)
+        # , shuffle=False, random_state=42)
+        cv = KFold(n_splits, shuffle=True, random_state=42)
     fis = []
     for train_index, test_index in cv.split(X):
         # print("TRAIN:", train_index, "TEST:", test_index)
@@ -355,11 +469,13 @@ def plot_feature_importances(fi, year=2017, mode='beta'):
         df = convert_da_to_long_form_df(fi, value_name='feature_importances')
         if mode != 'beta':
             df['feature_importances'] = df['feature_importances'] * 100
-        sns.barplot(data=df, x='feature_importances', y='regressor', ci='sd', ax=ax)
+        sns.barplot(data=df, x='feature_importances',
+                    y='regressor', ci='sd', ax=ax)
     else:
         if mode != 'beta':
             fi['value'] = fi['value'] * 100
-        sns.barplot(data=fi, x='value', y='regressor', hue='Sale_year', ci='sd')
+        sns.barplot(data=fi, x='value', y='regressor',
+                    hue='Sale_year', ci='sd')
     ax.grid(True)
     if mode == 'beta':
         ax.set_xlabel('Coefficiants')
@@ -388,12 +504,12 @@ def plot_cvr(cvr, y='test_r2', x='Model'):
     return fig
 
 
-
 def load_HP_params_from_optimized_model(path, pgrid='light', year=2000,
                                         model_name='RF', return_df=False, return_object=True):
     import joblib
     from Migration_main import path_glob
-    files = path_glob(path, 'GRSRCHCV_{}_*_{}_{}.pkl'.format(model_name, pgrid, year))
+    files = path_glob(
+        path, 'GRSRCHCV_{}_*_{}_{}.pkl'.format(model_name, pgrid, year))
     file = [x for x in files if model_name in x.as_posix()][0]
     gr = joblib.load(file)
     if return_object:
@@ -565,10 +681,11 @@ class ML_Classifier_Switcher(object):
             #                    'degree': [1, 2, 3, 4, 5],
             #                    'coef0': [0, 1, 2, 3, 4]}
             self.param_grid = {'kernel': ['rbf', 'sigmoid', 'linear'],
-                               'C': np.logspace(-2, 2, 10), # order_of_mag(-2, 2),
-                                'gamma': np.logspace(-5, 1, 14)}#, # order_of_mag(-5, 0),
-                               # 'degree': [1, 2, 3, 4, 5],
-                               # 'coef0': [0, 1, 2, 3, 4]}
+                               # order_of_mag(-2, 2),
+                               'C': np.logspace(-2, 2, 10),
+                               'gamma': np.logspace(-5, 1, 14)}  # , # order_of_mag(-5, 0),
+            # 'degree': [1, 2, 3, 4, 5],
+            # 'coef0': [0, 1, 2, 3, 4]}
         return SVR()
 
     def MLP(self):
@@ -623,7 +740,6 @@ class ML_Classifier_Switcher(object):
     def MLR(self):
         from sklearn.linear_model import LinearRegression
         return LinearRegression(n_jobs=-1)
-
 
     def Ridge(self):
         from sklearn.linear_model import Ridge
