@@ -1044,6 +1044,89 @@ def produce_nadlan_rest_request(city='רעננה', street='אחוזה',
     return body
 
 
+def get_XY_coords_using_address(search_str='משה סנה 2 רעננה'):
+    import requests
+    url = 'https://es.govmap.gov.il/TldSearch/api/DetailsByQuery?query={}&lyrs=1&gid=govmap'.format(search_str)
+    r = requests.get(url)
+    if r.status_code != 200:
+        raise ValueError('couldnt get a response ({}).'.format(r.status_code))
+    result = r.json()
+    if result['Error'] != 0:
+        raise ValueError('{}.'.format(result['ErrorMsg']))
+    return result
+
+
+def parse_XY_coords_from_address(result):
+    import pandas as pd
+    try:
+        di = result['data']['ADDRESS'][0]
+    except KeyError:
+        di = result['data']['STREET'][0]
+    df = pd.Series(di).to_frame().T
+    df = df.drop(['AData', 'MetaData'], axis=1)
+    return df
+
+
+def run_XY_address_script(poll_df):
+    import pandas as pd
+    import numpy as np
+    dfs = []
+    total = len(poll_df)
+    cnt = 0
+    for i, row in poll_df.iterrows():
+        st_type = 'רחוב '
+        if 'סמטת ' in str(row['street']):
+            st_type = ''
+        elif 'שד ' in str(row['street']) or 'שדרות ' in str(row['street']):
+            st_type = ''
+        search_str = st_type + row['street'] + ' ' +  row['house_num'] + ' ' + row['city']
+        print('searching XY for {} ({}/{}).'.format(search_str,cnt, total))
+        try:
+            r = get_XY_coords_using_address(search_str)
+        except ValueError:
+            search_str = st_type + row['street'] + ' ' + row['city']
+            print('did not find it, trying: {}'.format(search_str))
+            try:
+                r = get_XY_coords_using_address(search_str)
+            except ValueError:
+                print('skipping...')
+                continue
+        sleep_between(0.3, 0.4)
+        df = parse_XY_coords_from_address(r)
+        df['ID'] = row['ID']
+        dfs.append(df)
+        cnt+=1
+        if np.mod(cnt, 40)==0:
+            sleep_between(3, 5)
+    df = pd.concat(dfs)
+    return df
+
+# def read_david_address(path=work_david):
+#     import pandas as pd
+#     df = pd.read_csv(path/'Addresses.csv', skiprows=1)
+#     return df
+
+
+def read_polling_address(path=work_david, unique_address=True):
+    import pandas as pd
+    df = pd.read_excel(path/'polling.xls')
+    df.columns = ['ID', 'city_code', 'poll_id', 'street', 'house_num',
+                  'house_letter', 'RC_ID', 'nafa', 'poll_desc', 'city', 'city_type']
+    inds = df[df['house_num'] == 0].index
+    df['house_num'] = df['house_num'].astype(str)
+    df.loc[inds, 'house_num'] = ''
+    if unique_address:
+        df = df.drop_duplicates(
+            subset=['street', 'house_num', 'poll_desc', 'city'])
+    inds = df[df['street'].str.strip() == df['city'].str.strip()].index
+    df_city_street = df.loc[inds]
+    df = df.drop(inds, axis=0)
+    df = df[~df['street'].isnull()]
+    inds = df[df['street'].str.contains('סמ ')].index
+    df.loc[inds, 'street'] = df.loc[inds, 'street'].str.replace('סמ ', 'סמטת ')
+    return df
+
+
 def post_nadlan_rest(body):
     """take body from request and post to nadlan.gov.il deals REST API"""
     import requests
