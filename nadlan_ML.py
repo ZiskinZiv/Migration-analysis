@@ -19,6 +19,14 @@ features2 = ['FLOORNO', 'DEALNATURE', 'NEWPROJECTTEXT',
 apts = ['דירה', 'דירה בבית קומות']
 apts_more = apts + ["קוטג' דו משפחתי", "קוטג' חד משפחתי",
                     "דירת גן", "בית בודד", "דירת גג", "דירת גג (פנטהאוז)"]
+plot_names = {'Floor_number': 'Floor',
+             'New': 'New Apartment',
+             'Periph_value': 'Peripheriality',
+             'distance_to_nearest_kindergarten': 'Nearest kindergarten',
+             'distance_to_nearest_school': 'Nearest school',
+             'Total_ends': 'Finished apartments',
+             'Rooms_3': '3 rooms', 'Rooms_5': '5 rooms'
+             }
 
 
 def create_total_inout_timeseries_from_migration_network_and_cbs():
@@ -206,18 +214,58 @@ def run_MLR_on_all_years(df):
     return ds
 
 
-def run_CV_on_all_years(df, model_name='RF', savepath=ml_path):
+def plot_MLR_results(ds):
+    import pandas as pd
+    import seaborn as sns
+    import matplotlib.pyplot as plt
+    sns.set_theme(style='ticks', font_scale=1.5)
+    fig, ax = plt.subplots(figsize=(17, 10))
+    df = ds['beta'].to_dataset('regressor').to_dataframe()
+    df = df.rename(plot_names, axis=1)
+    df.index = pd.to_datetime(df.index, format='%Y')
+    df.plot(ax=ax, legend=False)
+    ax.legend(ncol=2, handleheight=0.1, labelspacing=0.01)
+    ax.set_ylabel(r'$\beta$ coefficient')
+    ax.grid(True)
+    fig.tight_layout()
+    return fig
+
+
+def read_and_run_FI_on_all_years(path=ml_path, pgrid='light'):
     import numpy as np
-    import xarray as xr
-    from sklearn.feature_selection import f_regression
     years = np.arange(2000, 2020, 1)
+    dfs = []
+    grs = []
     for year in years:
+        df, gr = load_HP_params_from_optimized_model(path, pgrid=pgrid, year=year,
+                                                     model_name='RF', return_df=False,
+                                                     return_object=True)
+        print(year, df.T)
+        dfs.append(df)
+        grs.append(gr)
+    return grs
+
+
+def run_CV_on_all_years(df, model_name='RF', savepath=ml_path, pgrid='normal',
+                        year=None):
+    import numpy as np
+    if year is None:
+        years = np.arange(2000, 2020, 1)
+        for year in years:
+            X, y, scaler = produce_X_y(df, year=year, y_name='Price', plot_Xcorr=False,
+                                       feats=features, dummy=None, scale_X=False)
+            # ml = ML_Classifier_Switcher()
+            # model = ml.pick_model(model_name)
+            cross_validation(X, y, model_name=model_name, n_splits=5, pgrid=pgrid,
+                             savepath=savepath, verbose=0, n_jobs=-1, year=year)
+    else:
         X, y, scaler = produce_X_y(df, year=year, y_name='Price', plot_Xcorr=False,
-                                   feats=features, dummy=None, scale_X=False)
-        # ml = ML_Classifier_Switcher()
-        # model = ml.pick_model(model_name)
-        cross_validation(X, y, model_name=model_name, n_splits=5, pgrid='light',
+                                       feats=features, dummy=None, scale_X=False)
+            # ml = ML_Classifier_Switcher()
+            # model = ml.pick_model(model_name)
+        cross_validation(X, y, model_name=model_name, n_splits=5, pgrid=pgrid,
                          savepath=savepath, verbose=0, n_jobs=-1, year=year)
+
 
     return
 
@@ -738,11 +786,11 @@ class ML_Classifier_Switcher(object):
                                'min_samples_split': [2, 5],
                                'n_estimators': [100, 300]}
         elif self.pgrid == 'normal':
-            self.param_grid = {'max_depth': [5, 10, 25, 50, 100],
-                               'max_features': ['auto', 'sqrt'],
-                               'min_samples_leaf': [1, 2, 5, 10],
-                               'min_samples_split': [2, 5, 15, 50],
-                               'n_estimators': [100, 300, 700, 1200]
+            self.param_grid = {'max_depth': [10, 15, 20],
+                               'max_features': ['auto'],
+                               'min_samples_leaf': [2, 5, 10],
+                               'min_samples_split': [5, 10, 15],
+                               'n_estimators': [300, 500, 700]
                                }
         elif self.pgrid == 'dense':
             self.param_grid = {'max_depth': [5, 10, 25, 50, 100, 150, 250],
