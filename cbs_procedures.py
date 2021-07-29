@@ -299,6 +299,19 @@ def read_historic_SEI(path=work_david):
     return df
 
 
+def read_emploment_centers_2008(path=work_david):
+    import pandas as pd
+    df = pd.read_excel(path / 'employment_centers_2008.xls',
+                       skiprows=9, na_values='..')
+    df.drop(df.tail(14).index, inplace=True)
+    df.columns = ['city_code', 'NameHe', 'Moked_NameHe', 'Total', 'TELA', 'JSLM', 'NTYA', 'ASHK', 'BEER', 'DIMO',
+                  'ARAD', 'ELAT', 'HAIF', 'CSAR', 'NZRT', 'Local', 'Distance', 'Variable', 'Unknown', 'Moked_NameEn', 'NameEn']
+    inds = df.loc[df['city_code'] == 2].index
+    df.loc[inds, 'city_code'] = 9800
+    df.set_index('city_code', inplace=True)
+    return df
+
+
 def read_social_economic_index(path=work_david, return_stat=True):
     import pandas as pd
     SEI_cluster_dict = {1: 1,
