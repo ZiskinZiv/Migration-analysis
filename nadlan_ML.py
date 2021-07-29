@@ -8,8 +8,7 @@ Created on Fri Jul  2 15:41:04 2021
 from MA_paths import work_david
 ml_path = work_david / 'ML'
 features = ['Floor_number', 'SEI', 'New', 'Periph_value', 'Sale_year', 'Rooms_345',
-            'distance_to_nearest_kindergarten', 'distance_to_nearest_school'
-            ,'Total_ends']
+            'distance_to_nearest_kindergarten', 'distance_to_nearest_school', 'Total_ends']
 
 features1 = ['FLOORNO', 'DEALNATURE', 'NEWPROJECTTEXT',
              'BUILDINGYEAR',  'SEI_value', 'Ground', 'P2015_value', 'year', 'Building_Growth_Rate']
@@ -20,13 +19,13 @@ apts = ['דירה', 'דירה בבית קומות']
 apts_more = apts + ["קוטג' דו משפחתי", "קוטג' חד משפחתי",
                     "דירת גן", "בית בודד", "דירת גג", "דירת גג (פנטהאוז)"]
 plot_names = {'Floor_number': 'Floor',
-             'New': 'New Apartment',
-             'Periph_value': 'Peripheriality',
-             'distance_to_nearest_kindergarten': 'Nearest kindergarten',
-             'distance_to_nearest_school': 'Nearest school',
-             'Total_ends': 'Finished apartments',
-             'Rooms_3': '3 rooms', 'Rooms_5': '5 rooms'
-             }
+              'New': 'New Apartment',
+              'Periph_value': 'Peripheriality',
+              'distance_to_nearest_kindergarten': 'Nearest kindergarten',
+              'distance_to_nearest_school': 'Nearest school',
+              'Total_ends': 'Finished apartments',
+              'Rooms_3': '3 rooms', 'Rooms_5': '5 rooms'
+              }
 
 
 def create_total_inout_timeseries_from_migration_network_and_cbs():
@@ -124,8 +123,10 @@ def prepare_features_and_save(path=work_david, savepath=None):
     # add inflow and outflow:
     print('Adding Inflow and Outflow')
     dfi, dfo = create_total_inout_timeseries_from_migration_network_and_cbs()
-    df = df.groupby(['Sale_year', 'city_code']).apply(add_bgr_func, dfi, name='Inflow')
-    df = df.groupby(['Sale_year', 'city_code']).apply(add_bgr_func, dfo, name='Outflow')
+    df = df.groupby(['Sale_year', 'city_code']).apply(
+        add_bgr_func, dfi, name='Inflow')
+    df = df.groupby(['Sale_year', 'city_code']).apply(
+        add_bgr_func, dfo, name='Outflow')
     # finally drop some cols so saving will not take a lot of space:
     df = df.drop(['P2015_cluster2', 'Parcel_Lot', 'Sale_Y_Q', 'Sale_quarter', 'Sale_month', 'District_HE', 'm2_per_room',
                   'StatArea_ID', 'Building', 'street_code', 'Street', 'ObjectID', 'TREND_FORMAT', 'TREND_IS_NEGATIVE', 'POLYGON_ID'], axis=1)
@@ -176,7 +177,7 @@ def load_nadlan_with_features(path=work_david, years=[2000, 2019], asset_type=ap
     import pandas as pd
     df = pd.read_csv(path/'Nadaln_with_features.csv', na_values='None')
     print('sclicing to {} - {}.'.format(years[0], years[1]))
-    df = df.loc[(df['Sale_year']>=years[0])&(df['Sale_year']<=years[1])]
+    df = df.loc[(df['Sale_year'] >= years[0]) & (df['Sale_year'] <= years[1])]
     print('choosing {} only.'.format(asset_type))
     df = df[df['Type_of_asset'].isin(asset_type)]
     print('adding to floor number.')
@@ -231,26 +232,72 @@ def plot_MLR_results(ds):
     return fig
 
 
-def read_and_run_FI_on_all_years(path=ml_path, pgrid='light'):
+def read_and_run_FI_on_all_years(df, path=ml_path, pgrid='light'):
     import numpy as np
+    import xarray as xr
     years = np.arange(2000, 2020, 1)
-    dfs = []
-    grs = []
+    fis = []
+    cvrs = []
     for year in years:
-        df, gr = load_HP_params_from_optimized_model(path, pgrid=pgrid, year=year,
-                                                     model_name='RF', return_df=False,
-                                                     return_object=True)
-        print(year, df.T)
-        dfs.append(df)
-        grs.append(gr)
-    return grs
+        print('running test on year {}.'.format(year))
+        X, y, sc = produce_X_y(df, year=year, y_name='Price', plot_Xcorr=False,
+                               feats=features, dummy=None, scale_X=False)
+        df_r, gr = load_HP_params_from_optimized_model(path, pgrid=pgrid, year=year,
+                                                       model_name='RF', return_df=False,
+                                                       return_object=True)
+        est = gr.best_estimator_
+        fi = manual_cross_validation_for_RF_feature_importances(X, y, est,
+                                                                n_splits=5,
+                                                                n_repeats=None,
+                                                                scorers=['r2'])
+        cvr = cross_validate_using_optimized_HP(X, y, est, model='RF', n_splits=5,
+                                                n_repeats=None, scorers=['r2'])
+        fis.append(fi)
+        cvrs.append(cvr)
+    fi = xr.concat(fis, 'year')
+    cvr = xr.concat(cvrs, 'year')
+    ds = xr.merge([fi, cvr])
+    ds['year'] = years
+    return ds
 
+
+def plot_RF_FI_results(ds):
+    import pandas as pd
+    import seaborn as sns
+    import numpy as np
+    import matplotlib.pyplot as plt
+    sns.set_theme(style='ticks', font_scale=1.5)
+    fig, ax = plt.subplots(figsize=(17, 10))
+    df = ds['feature_importances'].mean('repeats').to_dataset('regressor').to_dataframe()
+    df = df * 100
+    df = df.rename(plot_names, axis=1)
+    df.index = pd.to_datetime(df.index, format='%Y')
+    x = df.index
+    ys=[df[x] for x in df.columns]
+    ax.stackplot(x,*ys, labels=[x for x in df.columns])
+    # df.plot(ax=ax, legend=False)
+    ax.legend(loc='center', ncol=2, handleheight=0.1, labelspacing=0.01)
+    # df_total = df.sum(axis=1)
+    # df_rel = df[df.columns[1:]].div(df_total, 0)*100
+    # for n in df_rel:
+    #     for i, (cs, ab, pc) in enumerate(zip(df.iloc[:, 1:].cumsum(1)[n],
+    #                                          df[n], df_rel[n])):
+    #         ax.text(cs - ab / 2, i, str(np.round(pc, 1)) + '%',
+    #                  va = 'center', ha = 'center')
+    ax.set_ylabel('Feature importances [%]')
+    ax.grid(True)
+    fig.tight_layout()
+    return fig
+
+    return
 
 def run_CV_on_all_years(df, model_name='RF', savepath=ml_path, pgrid='normal',
-                        year=None):
+                        year=None, year_start=2010):
     import numpy as np
     if year is None:
         years = np.arange(2000, 2020, 1)
+        if year_start is not None:
+            years = np.arange(year_start, 2020, 1)
         for year in years:
             X, y, scaler = produce_X_y(df, year=year, y_name='Price', plot_Xcorr=False,
                                        feats=features, dummy=None, scale_X=False)
@@ -260,12 +307,11 @@ def run_CV_on_all_years(df, model_name='RF', savepath=ml_path, pgrid='normal',
                              savepath=savepath, verbose=0, n_jobs=-1, year=year)
     else:
         X, y, scaler = produce_X_y(df, year=year, y_name='Price', plot_Xcorr=False,
-                                       feats=features, dummy=None, scale_X=False)
-            # ml = ML_Classifier_Switcher()
-            # model = ml.pick_model(model_name)
+                                   feats=features, dummy=None, scale_X=False)
+        # ml = ML_Classifier_Switcher()
+        # model = ml.pick_model(model_name)
         cross_validation(X, y, model_name=model_name, n_splits=5, pgrid=pgrid,
                          savepath=savepath, verbose=0, n_jobs=-1, year=year)
-
 
     return
 
@@ -312,7 +358,8 @@ def produce_X_y(df, year=2015, y_name='Price', plot_Xcorr=True,
         X = X.drop([dummy], axis=1)
     # scale Floor numbers:
     X['Floor_number'] = np.log(X['Floor_number']+1)
-    X['distance_to_nearest_kindergarten'] = np.log(X['distance_to_nearest_kindergarten'])
+    X['distance_to_nearest_kindergarten'] = np.log(
+        X['distance_to_nearest_kindergarten'])
     X['distance_to_nearest_school'] = np.log(X['distance_to_nearest_school'])
     # X['Year_Built'] = np.log(X['Year_Built'])
     # finally, scale y to log10 and X to minmax 0-1:
@@ -385,6 +432,7 @@ def cross_validate_using_optimized_HP(X, y, estimator, model='RF', n_splits=5,
     from sklearn.model_selection import RepeatedKFold
     from sklearn.model_selection import LeaveOneGroupOut
     from sklearn.model_selection import GroupShuffleSplit
+    import xarray as xr
     import pandas as pd
     # logo = LeaveOneGroupOut()
     # gss = GroupShuffleSplit(n_splits=20, test_size=0.1, random_state=1)
@@ -415,13 +463,19 @@ def cross_validate_using_optimized_HP(X, y, estimator, model='RF', n_splits=5,
     #     print('using LeaveOneGroupOut strategy.')
     cvr = cross_validate(estimator, X, y, scoring=scorers, cv=cv)
     df = pd.DataFrame(cvr)
+    df.index.name = 'repeats'
+    das = []
+    for scorer in scorers:
+        da = df['test_{}'.format(scorer)].to_xarray()
+        das.append(da)
+    ds = xr.merge(das)
     # elif strategy == 'GSS-year':
     #     print('using GroupShuffleSplit strategy.')
     #     cvr = cross_validate(ml_model, X, y, scoring=scores_dict, cv=gss,
     #                          groups=groups)
     # else:
     #     cvr = cross_validate(ml_model, X, y, scoring=scores_dict, cv=cv)
-    return df
+    return ds
 
 
 def save_gridsearchcv_object(GridSearchCV, savepath, filename):
