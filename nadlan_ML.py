@@ -15,6 +15,13 @@ features1 = ['FLOORNO', 'DEALNATURE', 'NEWPROJECTTEXT',
 
 features2 = ['FLOORNO', 'DEALNATURE', 'NEWPROJECTTEXT',
              'SEI_value', 'Ground', 'year', 'Building_Growth_Rate']
+
+features3 = ['Floor_number', 'SEI', 'New', 'Periph_value', 'Sale_year', 'Rooms_345',
+             'Total_ends', 'mean_distance_to_4_mokdim']
+
+features4 = ['Floor_number', 'SEI', 'New', 'Sale_year', 'Rooms_345',
+             'Total_ends', 'mean_distance_to_28_mokdim']
+
 apts = ['דירה', 'דירה בבית קומות']
 apts_more = apts + ["קוטג' דו משפחתי", "קוטג' חד משפחתי",
                     "דירת גן", "בית בודד", "דירת גג", "דירת גג (פנטהאוז)"]
@@ -26,6 +33,28 @@ plot_names = {'Floor_number': 'Floor',
               'Total_ends': 'Finished apartments',
               'Rooms_3': '3 rooms', 'Rooms_5': '5 rooms'
               }
+
+
+def calculate_distance_from_gdf_to_employment_centers(gdf, path=work_david, n=4):
+    from cbs_procedures import read_emploment_centers_2008
+    gdf = gdf[~gdf['ITM-E'].isnull()]
+    gdf = gdf[~gdf['ITM-N'].isnull()]
+
+    def mean_distance_to_n_mokdim(x):
+        # x = gdf['geometry']
+        dists = points.distance(x).to_frame('distance').sort_values('distance')
+        mean_dist = dists.iloc[0:n].mean() / 1000
+        return mean_dist.item()
+
+    points = read_emploment_centers_2008(path, shape=True)
+    if n is not None:
+        gdf['mean_distance_to_{}_mokdim'.format(n)] = gdf['geometry'].apply(mean_distance_to_n_mokdim)
+    else:
+        for i, row in points.iterrows():
+            print('calculating distance to {}.'.format(row['NameHE']))
+            name = 'kms_to_{}'.format(i)
+            gdf[name] = gdf.distance(row['geometry']) / 1000.0
+    return gdf
 
 
 def create_total_inout_timeseries_from_migration_network_and_cbs():
@@ -173,34 +202,45 @@ def scale_df(df, scaler, cols=None):
     return df_scaled, scaler
 
 
-def load_nadlan_with_features(path=work_david, years=[2000, 2019], asset_type=apts):
+def load_nadlan_with_features(path=work_david, years=[2000, 2019], asset_type=apts, mokdim_version=False):
     import pandas as pd
-    df = pd.read_csv(path/'Nadaln_with_features.csv', na_values='None')
-    print('sclicing to {} - {}.'.format(years[0], years[1]))
-    df = df.loc[(df['Sale_year'] >= years[0]) & (df['Sale_year'] <= years[1])]
-    print('choosing {} only.'.format(asset_type))
-    df = df[df['Type_of_asset'].isin(asset_type)]
-    print('adding to floor number.')
-    floor1 = df.loc[(~df['Another_floor_1'].isnull())]['Another_floor_1']
-    df.loc[floor1.index, 'Floor_number'] = floor1.values
+    if mokdim_version:
+        df = pd.read_csv(path/'Nadaln_with_features_and_distance_to_employment_centers.csv', na_values='None')
+    else:
+        df = pd.read_csv(path/'Nadaln_with_features.csv', na_values='None')
+        print('sclicing to {} - {}.'.format(years[0], years[1]))
+        df = df.loc[(df['Sale_year'] >= years[0]) & (df['Sale_year'] <= years[1])]
+        print('choosing {} only.'.format(asset_type))
+        df = df[df['Type_of_asset'].isin(asset_type)]
+        print('adding to floor number.')
+        floor1 = df.loc[(~df['Another_floor_1'].isnull())]['Another_floor_1']
+        df.loc[floor1.index, 'Floor_number'] = floor1.values
     return df
 
 
-def run_MLR_on_all_years(df):
+def run_MLR_on_all_years(df, feats=features, dummy='Rooms_345'):
     import numpy as np
     import xarray as xr
-    from sklearn.feature_selection import f_regression
+    import statsmodels.api as sm
+
+    # from sklearn.feature_selection import f_regression
     years = np.arange(2000, 2020, 1)
     das = []
     for year in years:
         X, y, scaler = produce_X_y(df, year=year, y_name='Price', plot_Xcorr=False,
-                                   feats=features, dummy='Rooms_345', scale_X=True)
-        ml = ML_Classifier_Switcher()
-        mlr = ml.pick_model('MLR')
-        mlr.fit(X, y)
-        score = mlr.score(X, y)
-        _, pval = f_regression(X, y)
-        beta = mlr.coef_
+                                   feats=feats, dummy=dummy, scale_X=True)
+        # ml = ML_Classifier_Switcher()
+        # mlr = ml.pick_model('MLR')
+        # mlr.fit(X, y)
+        # score = mlr.score(X, y)
+        X2 = sm.add_constant(X)
+        est = sm.OLS(y, X2)
+        est = est.fit()
+        # _, pval = f_regression(X, y)
+        # beta = mlr.coef_
+        pval = est.summary2().tables[1]['P>|t|'][1:]
+        beta = est.summary2().tables[1]['Coef.'][1:]
+        score = est.rsquared
         beta_da = xr.DataArray(beta, dims=['regressor'])
         beta_da.name = 'beta'
         pval_da = xr.DataArray(pval, dims=['regressor'])
@@ -343,7 +383,8 @@ def produce_X_y(df, year=2015, y_name='Price', plot_Xcorr=True,
     # df['New_apartment'] = df['New_apartment'].astype(int)
     if plot_Xcorr:
         sns.heatmap(X.corr(), annot=True)
-    X['Rooms_345'] = X['Rooms_345'].astype(int)
+    if 'Rooms_345' in X.columns:
+        X['Rooms_345'] = X['Rooms_345'].astype(int)
     # do onhotencoding on rooms:
     # jobs_encoder = LabelBinarizer()
     # jobs_encoder.fit(X['Rooms_345'])
@@ -357,10 +398,16 @@ def produce_X_y(df, year=2015, y_name='Price', plot_Xcorr=True,
         X = pd.concat([X, rooms.drop('Rooms_4', axis=1)], axis=1)
         X = X.drop([dummy], axis=1)
     # scale Floor numbers:
-    X['Floor_number'] = np.log(X['Floor_number']+1)
-    X['distance_to_nearest_kindergarten'] = np.log(
-        X['distance_to_nearest_kindergarten'])
-    X['distance_to_nearest_school'] = np.log(X['distance_to_nearest_school'])
+    if 'Floor_number' in X.columns:
+        X['Floor_number'] = np.log(X['Floor_number']+1)
+    if any(X.columns.str.contains('mean_distance')):
+        col = X.loc[:, X.columns.str.contains('mean_distance')].columns[0]
+        X[col] = np.log(X[col])
+    if 'distance_to_nearest_kindergarten' in X.columns:
+        X['distance_to_nearest_kindergarten'] = np.log(
+            X['distance_to_nearest_kindergarten'])
+    if 'distance_to_nearest_school' in X.columns:
+        X['distance_to_nearest_school'] = np.log(X['distance_to_nearest_school'])
     # X['Year_Built'] = np.log(X['Year_Built'])
     # finally, scale y to log10 and X to minmax 0-1:
     Xscaler = MinMaxScaler()
