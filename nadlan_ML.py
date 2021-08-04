@@ -35,20 +35,27 @@ plot_names = {'Floor_number': 'Floor',
               }
 
 
-def calculate_distance_from_gdf_to_employment_centers(gdf, path=work_david, n=4):
+def calculate_distance_from_gdf_to_employment_centers(gdf, path=work_david, n=4,
+                                                      weights='Pop2020'):
     from cbs_procedures import read_emploment_centers_2008
+    import numpy as np
     gdf = gdf[~gdf['ITM-E'].isnull()]
     gdf = gdf[~gdf['ITM-N'].isnull()]
 
-    def mean_distance_to_n_mokdim(x):
+    def mean_distance_to_n_mokdim(x, weights=None):
         # x = gdf['geometry']
-        dists = points.distance(x).to_frame('distance').sort_values('distance')
-        mean_dist = dists.iloc[0:n].mean() / 1000
+        dists = points.distance(x).to_frame('distance') / 1000
+        dists['Pop2020'] = points['Pop2020'] / 1000
+        dists = dists.sort_values('distance')
+        if weights is None:
+            mean_dist = dists.iloc[0:n].mean()
+        else:
+            mean_dist = np.average(dists.iloc[0:n]['distance'], weights=dists.iloc[0:n][weights])
         return mean_dist.item()
 
     points = read_emploment_centers_2008(path, shape=True)
     if n is not None:
-        gdf['mean_distance_to_{}_mokdim'.format(n)] = gdf['geometry'].apply(mean_distance_to_n_mokdim)
+        gdf['mean_distance_to_{}_mokdim'.format(n)] = gdf['geometry'].apply(mean_distance_to_n_mokdim, weights=weights)
     else:
         for i, row in points.iterrows():
             print('calculating distance to {}.'.format(row['NameHE']))
