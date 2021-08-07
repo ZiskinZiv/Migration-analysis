@@ -36,7 +36,7 @@ plot_names = {'Floor_number': 'Floor',
 
 
 def calculate_distance_from_gdf_to_employment_centers(gdf, path=work_david, n=4,
-                                                      weights='Pop2020'):
+                                                      weights='Pop2020', inverse=-1):
     from cbs_procedures import read_emploment_centers_2008
     import numpy as np
     gdf = gdf[~gdf['ITM-E'].isnull()]
@@ -47,6 +47,9 @@ def calculate_distance_from_gdf_to_employment_centers(gdf, path=work_david, n=4,
         dists = points.distance(x).to_frame('distance') / 1000
         dists['Pop2020'] = points['Pop2020'] / 1000
         dists = dists.sort_values('distance')
+        if inverse is not None:
+            dists['distance'] = dists['distance']**inverse
+            return dists['distance'].mean()
         if weights is None:
             mean_dist = dists.iloc[0:n].mean()
         else:
