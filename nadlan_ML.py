@@ -44,12 +44,12 @@ def calculate_distance_from_gdf_to_employment_centers(gdf, path=work_david, n=4,
 
     def mean_distance_to_n_mokdim(x, weights=None):
         # x = gdf['geometry']
-        dists = points.distance(x).to_frame('distance') / 1000
+        dists = points.distance(x).to_frame('distance')
         dists['Pop2020'] = points['Pop2020'] / 1000
         dists = dists.sort_values('distance')
         if inverse is not None:
             dists['distance'] = dists['distance']**inverse
-            return dists['distance'].mean()
+            # return dists['distance'].mean()
         if weights is None:
             mean_dist = dists.iloc[0:n].mean()
         else:
