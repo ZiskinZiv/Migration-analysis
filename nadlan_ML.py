@@ -3,6 +3,7 @@
 """
 Created on Fri Jul  2 15:41:04 2021
 Strategy:
+-1) show mokdim_28 high corr to Priph_value
 0) pre-process Rooms to continous variable
 1) do MLR baseline with all best features (standartscaler)
 2) do MLR without big predictors (SEI & mean mokdim)
@@ -23,8 +24,15 @@ features2 = ['FLOORNO', 'DEALNATURE', 'NEWPROJECTTEXT',
 features3 = ['Floor_number', 'SEI', 'New', 'Periph_value', 'Sale_year', 'Rooms_345',
              'Total_ends', 'mean_distance_to_4_mokdim']
 
-best = ['Floor_number', 'SEI', 'New', 'Sale_year', 'Rooms_345',
-             'Total_ends', 'mean_distance_to_28_mokdim']
+best = ['Floor_number', 'SEI', 'New', 'Sale_year', 'Rooms',
+        'Total_ends', 'mean_distance_to_28_mokdim']
+
+next_best = ['Floor_number', 'New', 'Sale_year', 'Rooms',
+             'Total_ends']
+
+best_rf = ['Floor_number', 'SEI_value_2015','SEI_value_2017',
+           'New', 'Sale_year', 'Rooms',
+           'Total_ends', 'mean_distance_to_28_mokdim']
 
 apts = ['דירה', 'דירה בבית קומות']
 apts_more = apts + ["קוטג' דו משפחתי", "קוטג' חד משפחתי",
@@ -35,7 +43,11 @@ plot_names = {'Floor_number': 'Floor',
               'distance_to_nearest_kindergarten': 'Nearest kindergarten',
               'distance_to_nearest_school': 'Nearest school',
               'Total_ends': 'Finished apartments',
-              'Rooms_3': '3 rooms', 'Rooms_5': '5 rooms'
+              'Rooms_3': '3 rooms', 'Rooms_5': '5 rooms',
+              'mean_distance_to_28_mokdim': 'Distance to Employment Centers',
+              'SEI': 'Social-Economic Index',
+              'SEI_value_2015': 'Social-Economic Index',
+              'SEI_value_2017': 'Social-Economic Index'
               }
 
 
@@ -273,6 +285,7 @@ def plot_MLR_results(ds):
     import pandas as pd
     import seaborn as sns
     import matplotlib.pyplot as plt
+    # TODO: add subplot of r2_score below beta
     sns.set_theme(style='ticks', font_scale=1.5)
     fig, ax = plt.subplots(figsize=(17, 10))
     df = ds['beta'].to_dataset('regressor').to_dataframe()
@@ -369,6 +382,50 @@ def run_CV_on_all_years(df, model_name='RF', savepath=ml_path, pgrid='normal',
 
     return
 
+def produce_X_y_RF(df, y_name='Price', feats=best_rf):
+    from sklearn.preprocessing import StandardScaler
+    from sklearn.preprocessing import MinMaxScaler
+    import numpy as np
+    import pandas as pd
+    df = df[df['Sale_year'].isin([2015, 2017])]
+    if feats is not None:
+        print('picking {} as features.'.format(feats))
+        X = df[feats].dropna()
+    y = df.loc[X.index, [y_name, 'Sale_year']]
+    X = X.reset_index(drop=True)
+    if 'New' in X.columns:
+        X['New'] = X['New'].astype(int)
+    y = y.reset_index(drop=True)
+    if 'Floor_number' in X.columns:
+        X['Floor_number'] = np.log(X['Floor_number']+1)
+    if 'Total_ends' in X.columns:
+        X['Total_ends'] = np.log(X['Total_ends']+1)
+    if any(X.columns.str.contains('mean_distance')):
+        col = X.loc[:, X.columns.str.contains('mean_distance')].columns[0]
+        X[col] = np.log(X[col])
+    Xscaler = StandardScaler()
+    #yscaler = MinMaxScaler()
+    # yscaler = PowerTransformer(method='yeo-johnson',standardize=True)
+    y2015 = y[y['Sale_year']==2015]
+    y2017 = y[y['Sale_year']==2017]
+    y2015 = y2015.apply(np.log10)
+    y2017 = y2017.apply(np.log10)
+    # y_scaled = yscaler.fit_transform(y_scaled.values.reshape(-1,1))
+    y2015 = pd.DataFrame(y2015, columns=[y_name])
+    y2017 = pd.DataFrame(y2017, columns=[y_name])
+    # scale X:
+    cols_to_scale = [x for x in X.columns if x != 'Sale_year']
+    X, scaler = scale_df(X, cols=cols_to_scale, scaler=Xscaler)
+    X2015 = X[X['Sale_year']==2015]
+    X2015.drop('SEI_value_2017', axis=1, inplace=True)
+    X2017 = X[X['Sale_year']==2017]
+    X2017.drop('SEI_value_2015', axis=1, inplace=True)
+    X2015 = X2015.rename({'SEI_value_2015': 'SEI'}, axis=1)
+    X2017 = X2017.rename({'SEI_value_2017': 'SEI'}, axis=1)
+    y2015 = y2015[y_name]
+    y2017 = y2017[y_name]
+    return X2015,y2015, X2017, y2017, Xscaler
+
 
 def produce_X_y(df, year=2015, y_name='Price', plot_Xcorr=True,
                 feats=features, dummy='Rooms_345', scale_X=True):
@@ -391,12 +448,14 @@ def produce_X_y(df, year=2015, y_name='Price', plot_Xcorr=True,
     X = X.reset_index(drop=True)
     if 'New' in X.columns:
         X['New'] = X['New'].astype(int)
+    if 'Has_ground_floor' in X.columns:
+        X['Has_ground_floor'] = X['Has_ground_floor'].astype(int)
     y = y.reset_index(drop=True)
     # df['Rooms'] = df['Rooms'].astype(int)
     # df['Floor_number'] = df['Floor_number'].astype(int)
     # df['New_apartment'] = df['New_apartment'].astype(int)
     if plot_Xcorr:
-        sns.heatmap(X.corr(), annot=True)
+        sns.heatmap(X.corr('spearman'), annot=True)
     if 'Rooms_345' in X.columns:
         X['Rooms_345'] = X['Rooms_345'].astype(int)
     # do onhotencoding on rooms:
@@ -414,6 +473,8 @@ def produce_X_y(df, year=2015, y_name='Price', plot_Xcorr=True,
     # scale Floor numbers:
     if 'Floor_number' in X.columns:
         X['Floor_number'] = np.log(X['Floor_number']+1)
+    if 'Total_ends' in X.columns:
+        X['Total_ends'] = np.log(X['Total_ends']+1)
     if any(X.columns.str.contains('mean_distance')):
         col = X.loc[:, X.columns.str.contains('mean_distance')].columns[0]
         X[col] = np.log(X[col])
