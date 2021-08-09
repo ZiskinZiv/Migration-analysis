@@ -2,7 +2,11 @@
 # -*- coding: utf-8 -*-
 """
 Created on Fri Jul  2 15:41:04 2021
-
+Strategy:
+0) pre-process Rooms to continous variable
+1) do MLR baseline with all best features (standartscaler)
+2) do MLR without big predictors (SEI & mean mokdim)
+3) do RF train/validate on 2015 and test on 2017, feature importances
 @author: shlomi
 """
 from MA_paths import work_david
@@ -19,7 +23,7 @@ features2 = ['FLOORNO', 'DEALNATURE', 'NEWPROJECTTEXT',
 features3 = ['Floor_number', 'SEI', 'New', 'Periph_value', 'Sale_year', 'Rooms_345',
              'Total_ends', 'mean_distance_to_4_mokdim']
 
-features4 = ['Floor_number', 'SEI', 'New', 'Sale_year', 'Rooms_345',
+best = ['Floor_number', 'SEI', 'New', 'Sale_year', 'Rooms_345',
              'Total_ends', 'mean_distance_to_28_mokdim']
 
 apts = ['דירה', 'דירה בבית קומות']
@@ -371,7 +375,7 @@ def produce_X_y(df, year=2015, y_name='Price', plot_Xcorr=True,
     import seaborn as sns
     from sklearn.preprocessing import LabelBinarizer
     from sklearn.preprocessing import PowerTransformer
-    # from sklearn.preprocessing import StandardScaler
+    from sklearn.preprocessing import StandardScaler
     from sklearn.preprocessing import MinMaxScaler
     import numpy as np
     import pandas as pd
@@ -420,7 +424,8 @@ def produce_X_y(df, year=2015, y_name='Price', plot_Xcorr=True,
         X['distance_to_nearest_school'] = np.log(X['distance_to_nearest_school'])
     # X['Year_Built'] = np.log(X['Year_Built'])
     # finally, scale y to log10 and X to minmax 0-1:
-    Xscaler = MinMaxScaler()
+    # Xscaler = MinMaxScaler()
+    Xscaler = StandardScaler()
     #yscaler = MinMaxScaler()
     # yscaler = PowerTransformer(method='yeo-johnson',standardize=True)
     y_scaled = y.apply(np.log10)
