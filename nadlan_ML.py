@@ -47,7 +47,8 @@ plot_names = {'Floor_number': 'Floor',
               'mean_distance_to_28_mokdim': 'Distance to Employment Centers',
               'SEI': 'Social-Economic Index',
               'SEI_value_2015': 'Social-Economic Index',
-              'SEI_value_2017': 'Social-Economic Index'
+              'SEI_value_2017': 'Social-Economic Index',
+              'Rooms': 'Rooms'
               }
 
 
@@ -285,16 +286,30 @@ def plot_MLR_results(ds):
     import pandas as pd
     import seaborn as sns
     import matplotlib.pyplot as plt
+    import matplotlib
     # TODO: add subplot of r2_score below beta
-    sns.set_theme(style='ticks', font_scale=1.5)
+    sns.set_theme(style='ticks', font_scale=1.8)
+    # matplotlib.rc_file_defaults()
+    # ax = sns.set_style(style=None, rc=None )
     fig, ax = plt.subplots(figsize=(17, 10))
     df = ds['beta'].to_dataset('regressor').to_dataframe()
     df = df.rename(plot_names, axis=1)
     df.index = pd.to_datetime(df.index, format='%Y')
-    df.plot(ax=ax, legend=False)
-    ax.legend(ncol=2, handleheight=0.1, labelspacing=0.01)
+    twinx = ax.twinx()
+    sns.lineplot(data = df, marker='o', sort = False, ax=ax)
+    # df.plot(legend=False, ax=ax, zorder=0)
+    ax.legend(ncol=2, handleheight=0.1, labelspacing=0.01, loc='upper left')
     ax.set_ylabel(r'$\beta$ coefficient')
     ax.grid(True)
+    dfr2=ds['r2_score'].to_dataframe()
+    dfr2.index = pd.to_datetime(dfr2.index, format='%Y')
+    twinx.bar(df.index, dfr2['r2_score'].values, width=350, color='k', alpha=0.2)
+    ax.set_ylim(-0.2, 0.2)
+    twinx.set_ylim(0, 1)
+    twinx.set_ylabel(r'R$^2$')
+    # ax.axhline(0, color='k', lw=0.5)
+    # sns.barplot(data = dfr2, x=df.index, y='r2_score', alpha=0.3, ax=twinx)
+    # dfr2.plot(ax=twinx, kind='bar', alpha=0.3, zorder=-1, legend=False)
     fig.tight_layout()
     return fig
 
@@ -707,7 +722,11 @@ def plot_feature_importances(fi, year=2017, mode='beta'):
     sns.set_theme(style='ticks', font_scale=1.5)
     fig, ax = plt.subplots(figsize=(17, 5))
     if not isinstance(fi, pd.DataFrame):
+        fi=fi.drop_sel(regressor='Sale_year')
         df = convert_da_to_long_form_df(fi, value_name='feature_importances')
+        df = df.sort_values('feature_importances')
+        df['regressor'] = df['regressor'].map(plot_names)
+        # df = df.rename(plot_names, axis=1)
         if mode != 'beta':
             df['feature_importances'] = df['feature_importances'] * 100
         sns.barplot(data=df, x='feature_importances',
@@ -715,6 +734,7 @@ def plot_feature_importances(fi, year=2017, mode='beta'):
     else:
         if mode != 'beta':
             fi['value'] = fi['value'] * 100
+        fi = fi.rename(plot_names, axis=1)
         sns.barplot(data=fi, x='value', y='regressor',
                     hue='Sale_year', ci='sd')
     ax.grid(True)
