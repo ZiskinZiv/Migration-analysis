@@ -822,6 +822,36 @@ def convert_da_to_long_form_df(da, var_name=None, value_name=None):
     return df
 
 
+def plot_jointplot(df, x='mean_distance_to_28_mokdim', y='Periph_value',
+                   xlim=[30, 130], ylim=[None, None], xlabel='Distance to Employment Centers [km]', ylabel='Periphery Index'):
+    import seaborn as sns
+    sns.set_theme(style='ticks', font_scale=1.5)
+    corr = df[[x,y]].corr('spearman')[y][0]
+    n = len(df[[x,y]].dropna())
+    # print(corr)
+    g = sns.JointGrid(data=df, x=x,
+                      y=y, height=7.5)
+    g.plot_joint(sns.kdeplot, fill=True, gridsize=100)
+    # g.plot_joint(sns.histplot, fill=True)
+    # g.plot_joint(sns.kdeplot, zorder=-1, levels=6)
+    g.plot_marginals(sns.histplot)
+    g.ax_joint.set_xlim(*xlim)
+    g.ax_joint.set_ylim(*ylim)
+    g.ax_joint.grid(True)
+    if xlabel is not None:
+        g.ax_joint.set_xlabel(xlabel)
+    if ylabel is not None:
+        g.ax_joint.set_ylabel(ylabel)
+    textstr = 'Spearman correlation: {:.2f}, n={}'.format(corr, n)
+    props = dict(boxstyle='round', facecolor='wheat', alpha=0.5, edgecolor='k')
+    print(textstr)
+    # g.ax_joint.text(0.24, 0.9, textstr,
+                    # verticalalignment='top', horizontalalignment='center',
+                    # transform=g.ax_joint.transAxes, color='k', fontsize=18, bbox=props)
+    g.fig.tight_layout()
+    return g
+
+
 def calculate_recurrent_times_and_pct_change(df, plot=True):
     import seaborn as sns
     sns.set_theme(style='ticks', font_scale=1.5)
