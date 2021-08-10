@@ -299,14 +299,45 @@ def read_historic_SEI(path=work_david):
     return df
 
 
-def read_emploment_centers_2008(path=work_david, shape=True):
+def read_emploment_centers_2008(path=work_david, shape=True, plot=False):
     import pandas as pd
     import geopandas as gpd
+    import contextily as ctx
+    import seaborn as sns
+    import matplotlib.pyplot as plt
+    sns.set_theme(style='ticks', font_scale=1.5)
     if shape:
         df = gpd.read_file(path/'gis/Points.shp')
         df = df.to_crs(2039)
         df = df[~df['Pop2020'].isnull()]
         df.set_index('CityID', inplace=True)
+        if plot:
+            fig, ax = plt.subplots(figsize=(6, 10))
+            gdf = df.to_crs(3857)
+            gdf['size'] = gdf['Pop2020'] / 1500
+            cat_labels = ['5k - 50k', '50k - 200k', '200k - 600k', '600k +']
+            gdf['cats'] = pd.cut(gdf['Pop2020'],[5000, 50000, 200000, 600000, 3000000], labels=cat_labels)
+            colors = ['xkcd:silver', 'xkcd:orange', 'xkcd:orangered', 'xkcd:maroon']
+            cdict = dict(zip(cat_labels, colors))
+            gdf['cat_as_colors'] = gdf['cats'].map(cdict)
+            gdf.plot(markersize='size', color=gdf['cat_as_colors'], ax=ax, alpha=1,
+                     edgecolor='black')
+            xlim = ([gdf.total_bounds[0]-50000,  gdf.total_bounds[2]+50000])
+            ylim = ([gdf.total_bounds[1]-50000,  gdf.total_bounds[3]+50000])
+            ax.set_xlim(xlim)
+            ax.set_ylim(ylim)
+            ctx.add_basemap(ax, url=ctx.providers.Stamen.TerrainBackground)
+            ax.tick_params(left=False, labelleft=False, bottom=False, labelbottom=False)
+            for label, color in zip(cat_labels, colors):
+                ax.scatter([0], [0], c=color, alpha=1, s=5/10*200,
+                           label=label, edgecolor='black')
+
+            ax.legend(scatterpoints=1, frameon=True,
+                      labelspacing=0.6, loc='upper left', fontsize=10,
+                      bbox_to_anchor=(0.01,0.99), title_fontsize=10)
+
+            fig.tight_layout()
+            return gdf
     else:
         df = pd.read_excel(path / 'employment_centers_2008.xls',
                            skiprows=9, na_values='..')
