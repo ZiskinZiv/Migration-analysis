@@ -40,7 +40,16 @@ P2015_2_name = {1: 'Very Peripheral',
                 4: 'Centralized',
                 5: 'Very Centralized'}
 
-
+SEI2_dict = {1: 1,
+             2: 1,
+             3: 2,
+             4: 2,
+             5: 3,
+             6: 3,
+             7: 4,
+             8: 4,
+             9: 5,
+             10: 5}
 def convert_df_variable_names(df, path=work_david, drop=True):
     import pandas as pd
     vlist = pd.read_csv(path/'nadlan_database_variable_list.csv', header=None)
@@ -177,7 +186,6 @@ def prepare_municiapal_level_and_RC_gis_areas(path=work_david, muni_path=muni_pa
         sers.append(ser)
     gdf_nonrc = gpd.GeoDataFrame(sers, geometry='geometry')
     gdf = pd.concat([gdf_rc, gdf_nonrc, js], axis=0)
-    gdf.geometry = gdf.geometry.simplify(10)
     gdf = gdf.reset_index(drop=True)
     filename = 'Municipal+J&S+Regional.shp'
     gdf.to_file(muni_path/filename, encoding='cp1255')
@@ -621,7 +629,7 @@ def calculate_pct_change_by_yearly_periods_and_grps(df,
 
 def plot_choropleth_muni_level(df, rooms=[3, 4], muni_path=muni_path,
                                hue='SEI2_cluster',
-                               col='NIS_per_M2'):
+                               col='Price_per_m2'):
     # import geopandas as gpd
     import seaborn as sns
     import matplotlib.pyplot as plt
@@ -636,26 +644,31 @@ def plot_choropleth_muni_level(df, rooms=[3, 4], muni_path=muni_path,
     cmap = sns.cubehelix_palette(5, start = .5, rot = -.75, as_cmap=True)
     # cmap = sns.color_palette("Greens", 5, as_cmap=True)
     # colors = sns.color_palette("RdPu", 10)[5:]
-    df = df[df['DEALNATUREDESCRIPTION'].isin(apts)]
-    df = df.loc[(df['year'] >= 1999) & (df['year'] <= 2019)]
+    # df = df[df['DEALNATUREDESCRIPTION'].isin(apts)]
+    df = df[df['Type_of_asset'].isin(apts)]
+    df = df.loc[(df['Sale_year'] >= 1999) & (df['Sale_year'] <= 2019)]
     print('picked {} only.'.format(apts))
     if rooms is not None:
-        df = df[(df['ASSETROOMNUM'] >= rooms[0]) &
-                (df['ASSETROOMNUM'] <= rooms[1])]
+        df = df[(df['Rooms'] >= rooms[0]) &
+                (df['Rooms'] <= rooms[1])]
         # df = df[df['ASSETROOMNUM'].isin(rooms)]
         print('picked {} rooms only.'.format(rooms))
-    if col == 'NIS_per_M2':
+    if col == 'Price_per_m2':
         ylabel = r'Median price per M$^2$ [NIS]'
     if hue == 'SEI2_cluster':
         leg_title = 'Social-Economic cluster'
+        if hue not in df.columns:
+            df['SEI2_cluster'] = df['SEI_cluster_2017'].map(SEI2_dict)
     elif hue == 'P2015_cluster2':
         leg_title = 'Periphery cluster'
+        if hue not in df.columns:
+            df['P2015_cluster2'] = df['Periph_cluster'].map(P2015_2_dict)
     fig, ax = plt.subplots(
         1, 2, gridspec_kw={'width_ratios': [4, 1]}, figsize=(20, 10))
     # df['P2015_cluster2'] = df['P2015_cluster2'].map(P2015_2_name)
     # df = df.rename({'P2015_cluster2': 'Centrality level'}, axis=1)
-    df['year'] = pd.to_datetime(df['year'], format='%Y')
-    sns.lineplot(data=df, x='year', y=col, hue=hue, n_boot=100,
+    df['Sale_year'] = pd.to_datetime(df['Sale_year'], format='%Y')
+    sns.lineplot(data=df, x='Sale_year', y=col, hue=hue, n_boot=100,
                  palette=cmap, estimator="mean", ax=ax[0], ci=99,
                  style=hue, lw=2, seed=1)
     ax[0].grid(True)
