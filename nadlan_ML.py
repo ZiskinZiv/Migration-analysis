@@ -27,6 +27,8 @@ features3 = ['Floor_number', 'SEI', 'New', 'Periph_value', 'Sale_year', 'Rooms_3
 best = ['Floor_number', 'SEI', 'New', 'Sale_year', 'Rooms',
         'Total_ends', 'mean_distance_to_28_mokdim']
 
+best_for_bs = best + ['city_code', 'Price']
+
 next_best = ['Floor_number', 'New', 'Sale_year', 'Rooms',
              'Total_ends']
 
@@ -193,7 +195,7 @@ def prepare_features_and_save(path=work_david, savepath=None):
     return df
 
 
-def calc_vif(X, dropna=True, asfloat=True):
+def calc_vif(X, dropna=True, asfloat=True, remove_mean=True):
     import pandas as pd
     from statsmodels.stats.outliers_influence import variance_inflation_factor
     if dropna:
@@ -202,6 +204,8 @@ def calc_vif(X, dropna=True, asfloat=True):
     if asfloat:
         print('considering as float.')
         X = X.astype(float)
+    if remove_mean:
+        X = X - X.mean()
     # Calculating VIF
     vif = pd.DataFrame()
     vif["variables"] = X.columns
@@ -245,7 +249,80 @@ def load_nadlan_with_features(path=work_david, years=[2000, 2019], asset_type=ap
     return df
 
 
-def run_MLR_on_all_years(df, feats=features, dummy='Rooms_345'):
+def create_bootstrapped_samples_for_each_city_code_and_year(df, cols=best_for_bs,
+                                                            min_deals=500,
+                                                            min_years=20,
+                                                            n_items=400,
+                                                            n_samples=5):
+    import pandas as pd
+    df2 = df[cols].dropna()
+    df2 = df2.reset_index(drop=True)
+    df1 = filter_df_by_minimum_deals_per_year(df2, min_deals=min_deals, min_years=min_years, col='Price')
+    years = [x for x in df1.columns]
+    cities = [x for x in df1.index]
+    dfs = []
+    cnt = 0
+    for year in years:
+        for city in cities:
+            for i in range(n_samples):
+                df3 = df2[(df2['city_code']==city) & (df2['Sale_year']==year)].sample(n=n_items,
+                                                                                      replace=False,
+                                                                                      random_state=cnt)
+                cnt += 1
+                dfs.append(df3)
+    dff = pd.concat(dfs, axis=0)
+    dff = dff.reset_index(drop=True)
+    return dff
+
+
+def filter_df_by_minimum_deals_per_year(df, min_deals=200, min_years=20, col='Price'):
+    df1 = df.groupby(['city_code', 'Sale_year'])[col].count().unstack()
+    n_total_cities = len(df1)
+    print('original number of cities: ', n_total_cities)
+    df1 = df1[df1.count(axis=1) == min_years]
+    n_years_cities = len(df1)
+    print('number of cities with {} years total: '.format(min_years), n_years_cities)
+    df1 = df1[df1 >= min_deals].dropna()
+    n_deals_cities = len(df1)
+    print('number of cities with minimum {} deals: '.format(min_deals), n_deals_cities)
+    # sort:
+    df1 = df1.sort_values(by=[x for x in df1.columns], axis=0, ascending=False)
+    return df1
+
+
+def convert_statsmodels_object_results_to_xarray(est):
+    import pandas as pd
+    import xarray as xr
+    # get main regression results per predictor:
+    t1 = est.summary().tables[1].as_html()
+    t1 = pd.read_html(t1, header=0, index_col=0)[0]
+    t1.columns = ['beta_coef', 'std_err', 't', 'P>|t|','CI_95_lower', 'CI_95_upper']
+    t1.index.name = 'regressor'
+    # get general results per all the data:
+    t0 = est.summary().tables[0].as_html()
+    t0 = pd.read_html(t0, header=None)[0]
+    t0_ser1 = t0.loc[:, [0,1]].set_index(0)[1]
+    t0_ser1.index.name=''
+    t0_ser2 = t0.loc[:, [2,3]].set_index(2)[3].dropna()
+    t0_ser2.index.name=''
+    t0 = pd.concat([t0_ser1, t0_ser2])
+    t0.index = t0.index.str.replace(':', '')
+    t2 = est.summary().tables[2].as_html()
+    t2 = pd.read_html(t2, header=None)[0]
+    t2_ser1 = t2.loc[:, [0,1]].set_index(0)[1]
+    t2_ser1.index.name=''
+    t2_ser2 = t2.loc[:, [2,3]].set_index(2)[3].dropna()
+    t2_ser2.index.name=''
+    t2 = pd.concat([t2_ser1, t2_ser2])
+    t2.index = t2.index.str.replace(':', '')
+    t = pd.concat([t0, t2])
+    t.index.name = 'variable'
+    ds = t.to_xarray().to_dataset('variable')
+    ds = xr.merge([ds, t1.to_xarray()])
+    return ds
+
+
+def run_MLR_on_all_years(df, feats=features, dummy='Rooms_345', scale_X=True):
     import numpy as np
     import xarray as xr
     import statsmodels.api as sm
@@ -255,7 +332,10 @@ def run_MLR_on_all_years(df, feats=features, dummy='Rooms_345'):
     das = []
     for year in years:
         X, y, scaler = produce_X_y(df, year=year, y_name='Price', plot_Xcorr=False,
-                                   feats=feats, dummy=dummy, scale_X=True)
+                                   feats=feats, dummy=dummy, scale_X=scale_X)
+        vif = calc_vif(X).set_index('variables')
+        vif.index.name = 'regressor'
+        vif = vif.to_xarray()['VIF']
         # ml = ML_Classifier_Switcher()
         # mlr = ml.pick_model('MLR')
         # mlr.fit(X, y)
@@ -265,46 +345,99 @@ def run_MLR_on_all_years(df, feats=features, dummy='Rooms_345'):
         est = est.fit()
         # _, pval = f_regression(X, y)
         # beta = mlr.coef_
-        pval = est.summary2().tables[1]['P>|t|'][1:]
-        beta = est.summary2().tables[1]['Coef.'][1:]
-        score = est.rsquared
-        beta_da = xr.DataArray(beta, dims=['regressor'])
-        beta_da.name = 'beta'
-        pval_da = xr.DataArray(pval, dims=['regressor'])
-        pval_da.name = 'pvalues'
-        r2_da = xr.DataArray(score)
-        r2_da.name = 'r2_score'
-        ds = xr.merge([beta_da, pval_da, r2_da])
-        ds['regressor'] = X.columns
+        # pval = est.summary2().tables[1]['P>|t|'][1:]
+        # beta = est.summary2().tables[1]['Coef.'][1:]
+        # score = est.rsquared
+        # beta_da = xr.DataArray(beta, dims=['regressor'])
+        # beta_da.name = 'beta'
+        # pval_da = xr.DataArray(pval, dims=['regressor'])
+        # pval_da.name = 'pvalues'
+        # r2_da = xr.DataArray(score)
+        # r2_da.name = 'r2_score'
+        # ds = xr.merge([beta_da, pval_da, r2_da])
+        # ds['regressor'] = X.columns
+        ds = convert_statsmodels_object_results_to_xarray(est)
+        ds['VIF'] = vif
         das.append(ds)
     ds = xr.concat(das, 'year')
     ds['year'] = years
     return ds
 
 
+def plot_MLR_const(ds):
+    import seaborn as sns
+    import matplotlib.pyplot as plt
+    import pandas as pd
+    import numpy as np
+    df = ds['P>|t|'].to_dataset('regressor').to_dataframe()
+    sns.set_theme(style='ticks', font_scale=1.8)
+    const = 10**(ds['beta_coef'].sel(regressor='const')) / 1e6
+    CI95_u = ds['CI_95_upper'].to_dataset('regressor').to_dataframe()['const']
+    CI95_l = ds['CI_95_lower'].to_dataset('regressor').to_dataframe()['const']
+    CI95_u = 10**CI95_u / 1e6
+    CI95_l = 10**CI95_l / 1e6
+    years = pd.to_datetime(const.year.values, format='%Y')
+    fig, ax = plt.subplots(figsize=(17, 10))
+    errors = np.array(list(zip((const.values-CI95_l.values), (CI95_u.values-const.values))))
+    errors = np.abs(errors)
+    g = ax.errorbar(years, const.values, errors.T, label='Mean Apartment')
+    ax.set_xlabel('')
+    ax.legend()
+    ax.grid(True)
+    ax.set_ylabel('Price [Millions NIS]')
+    fig.tight_layout()
+    return
+
+
+def plot_MLR_field(ds, field='VIF', title='Variance Inflation Factor'):
+    import seaborn as sns
+    import matplotlib.pyplot as plt
+    ds = ds.drop_sel(regressor='const')
+    df = ds[field].to_dataset('regressor').to_dataframe()
+    sns.set_theme(style='ticks', font_scale=1.2)
+    df = df.rename(plot_names, axis=1)
+    fig, ax = plt.subplots(figsize=(17, 10))
+    g = sns.heatmap(df.T.round(2), annot=True, ax=ax, cmap='Reds')
+    g.set_xticklabels(g.get_xticklabels(), rotation = 30)
+    ax.set_xlabel('')
+    fig.suptitle(title)
+    fig.tight_layout()
+    return
+    # matplotlib.rc_file_defaults()
+    # ax = sns.set_style(style=None, rc=None )
+
 def plot_MLR_results(ds):
     import pandas as pd
     import seaborn as sns
     import matplotlib.pyplot as plt
-    import matplotlib
-    # TODO: add subplot of r2_score below beta
+    import numpy as np
     sns.set_theme(style='ticks', font_scale=1.8)
     # matplotlib.rc_file_defaults()
     # ax = sns.set_style(style=None, rc=None )
     fig, ax = plt.subplots(figsize=(17, 10))
-    df = ds['beta'].to_dataset('regressor').to_dataframe()
-    df = df.rename(plot_names, axis=1)
-    df.index = pd.to_datetime(df.index, format='%Y')
+    # drop const:
+    ds = ds.drop_sel(regressor='const')
+    beta = ds['beta_coef'].to_dataset('regressor').to_dataframe()
+    beta = beta.rename(plot_names, axis=1)
+    CI95_u = ds['CI_95_upper'].to_dataset('regressor').to_dataframe()
+    CI95_u = CI95_u.rename(plot_names, axis=1)
+    CI95_l = ds['CI_95_lower'].to_dataset('regressor').to_dataframe()
+    CI95_l = CI95_l.rename(plot_names, axis=1)
+    beta.index = pd.to_datetime(beta.index, format='%Y')
     twinx = ax.twinx()
-    sns.lineplot(data = df, marker='o', sort = False, ax=ax)
+    for reg in beta.columns:
+        errors = np.array(list(zip((beta[reg].values-CI95_l[reg].values), (CI95_u[reg].values-beta[reg].values))))
+        errors = np.abs(errors)
+        ax.errorbar(beta[reg].index, beta[reg].values, errors.T, label=reg, lw=2)
+    # sns.lineplot(data = df, marker='o', sort = False, ax=ax)
     # df.plot(legend=False, ax=ax, zorder=0)
-    ax.legend(ncol=2, handleheight=0.1, labelspacing=0.01, loc='upper left')
+    ax.legend(ncol=3, handleheight=0.1, labelspacing=0.01, loc='upper left', fontsize=18)
     ax.set_ylabel(r'$\beta$ coefficient')
     ax.grid(True)
-    dfr2=ds['r2_score'].to_dataframe()
+    dfr2 = ds['R-squared'].to_dataframe()
     dfr2.index = pd.to_datetime(dfr2.index, format='%Y')
-    twinx.bar(df.index, dfr2['r2_score'].values, width=350, color='k', alpha=0.2)
-    ax.set_ylim(-0.2, 0.2)
+    twinx.bar(beta.index, dfr2['R-squared'].values, width=350, color='k', alpha=0.2)
+    ax.set_ylim(-0.65, 0.65)
     twinx.set_ylim(0, 1)
     twinx.set_ylabel(r'R$^2$')
     # ax.axhline(0, color='k', lw=0.5)
@@ -470,7 +603,7 @@ def produce_X_y(df, year=2015, y_name='Price', plot_Xcorr=True,
     # df['Floor_number'] = df['Floor_number'].astype(int)
     # df['New_apartment'] = df['New_apartment'].astype(int)
     if plot_Xcorr:
-        sns.heatmap(X.corr('spearman'), annot=True)
+        sns.heatmap(X.corr('pearson'), annot=True)
     if 'Rooms_345' in X.columns:
         X['Rooms_345'] = X['Rooms_345'].astype(int)
     # do onhotencoding on rooms:
@@ -498,19 +631,27 @@ def produce_X_y(df, year=2015, y_name='Price', plot_Xcorr=True,
             X['distance_to_nearest_kindergarten'])
     if 'distance_to_nearest_school' in X.columns:
         X['distance_to_nearest_school'] = np.log(X['distance_to_nearest_school'])
+    if 'mean_distance_to_28_mokdim' in X.columns:
+        X['mean_distance_to_28_mokdim'] = np.log(X['mean_distance_to_28_mokdim'])
     # X['Year_Built'] = np.log(X['Year_Built'])
+    # if city_code col exist, drop it:
+    if 'city_code' in X.columns:
+        X = X.drop('city_code', axis=1)
     # finally, scale y to log10 and X to minmax 0-1:
     # Xscaler = MinMaxScaler()
     Xscaler = StandardScaler()
     #yscaler = MinMaxScaler()
     # yscaler = PowerTransformer(method='yeo-johnson',standardize=True)
-    y_scaled = y.apply(np.log10)
+    y_scaled = y.apply(np.log)
     # y_scaled = yscaler.fit_transform(y_scaled.values.reshape(-1,1))
     y = pd.DataFrame(y_scaled, columns=[y_name])
     if scale_X:
-        X, scaler = scale_df(X, scaler=Xscaler)
+        X, scaler = scale_df(X, scaler=Xscaler, cols=[x for x in X.columns if 'New' not in x])
+        y, scaler = scale_df(y, scaler=Xscaler)
+    else:
+        scaler = Xscaler
     y = y[y_name]
-    return X, y, Xscaler  # , yscaler
+    return X, y, scaler  # , yscaler
 
 
 def nadlan_simple_ML(df, year=2000, model_name='RF', feats=features1):
