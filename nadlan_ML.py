@@ -11,6 +11,7 @@ Strategy:
 @author: shlomi
 """
 from MA_paths import work_david
+import numpy as np
 ml_path = work_david / 'ML'
 features = ['Floor_number', 'SEI', 'New', 'Periph_value', 'Sale_year', 'Rooms_345',
             'distance_to_nearest_kindergarten', 'distance_to_nearest_school', 'Total_ends']
@@ -24,17 +25,20 @@ features2 = ['FLOORNO', 'DEALNATURE', 'NEWPROJECTTEXT',
 features3 = ['Floor_number', 'SEI', 'New', 'Periph_value', 'Sale_year', 'Rooms_345',
              'Total_ends', 'mean_distance_to_4_mokdim']
 
-best = ['Floor_number', 'SEI', 'New', 'Sale_year', 'Rooms',
-        'Total_ends', 'mean_distance_to_28_mokdim']
+best = ['Floor_number', 'SEI', 'New', 'Sale_year', 'Rooms_345',
+        'Total_ends', 'mean_distance_to_28_mokdim', 'Netflow', 'MISH']
 
+best_years = best + ['year_{}'.format(x) for x in np.arange(2001, 2020)]
 best_for_bs = best + ['city_code', 'Price']
 
 next_best = ['Floor_number', 'New', 'Sale_year', 'Rooms',
              'Total_ends']
 
-best_rf = ['Floor_number', 'SEI_value_2015','SEI_value_2017',
+best_rf = ['Floor_number', 'SEI_value_2015', 'SEI_value_2017',
            'New', 'Sale_year', 'Rooms',
            'Total_ends', 'mean_distance_to_28_mokdim']
+
+dummies = ['New', 'Rooms_3', 'Rooms_5', 'MISH']
 
 apts = ['דירה', 'דירה בבית קומות']
 apts_more = apts + ["קוטג' דו משפחתי", "קוטג' חד משפחתי",
@@ -44,13 +48,13 @@ plot_names = {'Floor_number': 'Floor',
               'Periph_value': 'Peripheriality',
               'distance_to_nearest_kindergarten': 'Nearest kindergarten',
               'distance_to_nearest_school': 'Nearest school',
-              'Total_ends': 'Finished apartments',
-              'Rooms_3': '3 rooms', 'Rooms_5': '5 rooms',
+              'Total_ends': 'Building rate',
               'mean_distance_to_28_mokdim': 'Distance to Employment Centers',
               'SEI': 'Social-Economic Index',
               'SEI_value_2015': 'Social-Economic Index',
               'SEI_value_2017': 'Social-Economic Index',
-              'Rooms': 'Rooms'
+              'Rooms': 'Rooms', 'Rooms_3': '3 Rooms', 'Rooms_5': '5 Rooms',
+              'Netflow': 'Net migration'
               }
 
 
@@ -72,12 +76,14 @@ def calculate_distance_from_gdf_to_employment_centers(gdf, path=work_david, n=4,
         if weights is None:
             mean_dist = dists.iloc[0:n].mean()
         else:
-            mean_dist = np.average(dists.iloc[0:n]['distance'], weights=dists.iloc[0:n][weights])
+            mean_dist = np.average(
+                dists.iloc[0:n]['distance'], weights=dists.iloc[0:n][weights])
         return mean_dist.item()
 
     points = read_emploment_centers_2008(path, shape=True)
     if n is not None:
-        gdf['mean_distance_to_{}_mokdim'.format(n)] = gdf['geometry'].apply(mean_distance_to_n_mokdim, weights=weights)
+        gdf['mean_distance_to_{}_mokdim'.format(n)] = gdf['geometry'].apply(
+            mean_distance_to_n_mokdim, weights=weights)
     else:
         for i, row in points.iterrows():
             print('calculating distance to {}.'.format(row['NameHE']))
@@ -214,6 +220,62 @@ def calc_vif(X, dropna=True, asfloat=True, remove_mean=True):
     return(vif)
 
 
+def interpert_beta_coefs(ds, name='beta_coef', dummies=dummies):
+    import numpy as np
+    import xarray as xr
+    df = ds[name].to_dataset('regressor').to_dataframe()
+    betas = []
+    # interpet dummy variables:
+    for dummy in dummies:
+        ser = 100*(np.exp(df[dummy])-1)
+        da = ser.to_xarray()
+        betas.append(da)
+    # interpet regular log variables:
+    # for every 10% change in var, the predicted log var is changed...:
+    regulars = [x for x in ds['regressor'].values if x not in dummies]
+    if 'const' in regulars:
+        regulars.remove('const')
+    for regular in regulars:
+        ser = 100*(1.1**df[regular]-1)
+        da = ser.to_xarray()
+        betas.append(da)
+    # now, the constant is the geometric mean of the Price:
+    da = np.exp(df['const']).to_xarray()
+    betas.append(da)
+    beta = xr.merge(betas)
+    beta = beta.to_array('regressor')
+    # beta = beta.sortby(ds['regressor'])
+    ds['{}_inter'.format(name)] = beta.transpose()
+    return ds
+
+
+def scale_log(df, cols=None, plus1_cols=None):
+    import numpy as np
+    import pandas as pd
+    if cols is None:
+        df_scaled = df.copy()
+        for col in df.columns:
+            if plus1_cols is None:
+                df_scaled[col] = df[col].apply(np.log)
+            else:
+                print('{} is scaled using log(x+1)!'.format(col))
+                df_scaled[col] = (df[col]+1).apply(np.log)
+    else:
+        print('scaling only {} cols.'.format(cols))
+        df_sliced = df[cols]
+        df_scaled = df_sliced.copy()
+        for col in df_sliced.columns:
+            if plus1_cols is None:
+                df_scaled[col] = df_sliced[col].apply(np.log)
+            else:
+                print('{} is scaled using log(x+1)!'.format(col))
+                df_scaled[col] = (df[col]+1).apply(np.log)
+        df_rest = df[[x for x in df.columns if x not in cols]]
+        df_scaled = pd.concat([df_scaled, df_rest], axis=1)
+        df_scaled = df_scaled[[x for x in df.columns]]
+    return df_scaled
+
+
 def scale_df(df, scaler, cols=None):
     import pandas as pd
     print('using {} scaler.'.format(scaler.__repr__()))
@@ -236,16 +298,25 @@ def scale_df(df, scaler, cols=None):
 def load_nadlan_with_features(path=work_david, years=[2000, 2019], asset_type=apts, mokdim_version=False):
     import pandas as pd
     if mokdim_version:
-        df = pd.read_csv(path/'Nadaln_with_features_and_distance_to_employment_centers.csv', na_values='None')
+        df = pd.read_csv(
+            path/'Nadaln_with_features_and_distance_to_employment_centers.csv', na_values='None')
     else:
         df = pd.read_csv(path/'Nadaln_with_features.csv', na_values='None')
         print('sclicing to {} - {}.'.format(years[0], years[1]))
-        df = df.loc[(df['Sale_year'] >= years[0]) & (df['Sale_year'] <= years[1])]
+        df = df.loc[(df['Sale_year'] >= years[0]) &
+                    (df['Sale_year'] <= years[1])]
         print('choosing {} only.'.format(asset_type))
         df = df[df['Type_of_asset'].isin(asset_type)]
         print('adding to floor number.')
         floor1 = df.loc[(~df['Another_floor_1'].isnull())]['Another_floor_1']
         df.loc[floor1.index, 'Floor_number'] = floor1.values
+        print('adding Netflow')
+        df['Netflow'] = df['Inflow']-df['Outflow']
+        # shift the 0 of netflow to +10000 so that i could
+        # use np.log afterwards in features preproccesing
+        df['Netflow'] += 10000
+        # also shift the SEI +3 for the log:
+        df['SEI'] += 3
     return df
 
 
@@ -257,7 +328,8 @@ def create_bootstrapped_samples_for_each_city_code_and_year(df, cols=best_for_bs
     import pandas as pd
     df2 = df[cols].dropna()
     df2 = df2.reset_index(drop=True)
-    df1 = filter_df_by_minimum_deals_per_year(df2, min_deals=min_deals, min_years=min_years, col='Price')
+    df1 = filter_df_by_minimum_deals_per_year(
+        df2, min_deals=min_deals, min_years=min_years, col='Price')
     years = [x for x in df1.columns]
     cities = [x for x in df1.index]
     dfs = []
@@ -265,9 +337,9 @@ def create_bootstrapped_samples_for_each_city_code_and_year(df, cols=best_for_bs
     for year in years:
         for city in cities:
             for i in range(n_samples):
-                df3 = df2[(df2['city_code']==city) & (df2['Sale_year']==year)].sample(n=n_items,
-                                                                                      replace=False,
-                                                                                      random_state=cnt)
+                df3 = df2[(df2['city_code'] == city) & (df2['Sale_year'] == year)].sample(n=n_items,
+                                                                                          replace=False,
+                                                                                          random_state=cnt)
                 cnt += 1
                 dfs.append(df3)
     dff = pd.concat(dfs, axis=0)
@@ -281,10 +353,12 @@ def filter_df_by_minimum_deals_per_year(df, min_deals=200, min_years=20, col='Pr
     print('original number of cities: ', n_total_cities)
     df1 = df1[df1.count(axis=1) == min_years]
     n_years_cities = len(df1)
-    print('number of cities with {} years total: '.format(min_years), n_years_cities)
+    print('number of cities with {} years total: '.format(
+        min_years), n_years_cities)
     df1 = df1[df1 >= min_deals].dropna()
     n_deals_cities = len(df1)
-    print('number of cities with minimum {} deals: '.format(min_deals), n_deals_cities)
+    print('number of cities with minimum {} deals: '.format(
+        min_deals), n_deals_cities)
     # sort:
     df1 = df1.sort_values(by=[x for x in df1.columns], axis=0, ascending=False)
     return df1
@@ -296,23 +370,24 @@ def convert_statsmodels_object_results_to_xarray(est):
     # get main regression results per predictor:
     t1 = est.summary().tables[1].as_html()
     t1 = pd.read_html(t1, header=0, index_col=0)[0]
-    t1.columns = ['beta_coef', 'std_err', 't', 'P>|t|','CI_95_lower', 'CI_95_upper']
+    t1.columns = ['beta_coef', 'std_err', 't',
+                  'P>|t|', 'CI_95_lower', 'CI_95_upper']
     t1.index.name = 'regressor'
     # get general results per all the data:
     t0 = est.summary().tables[0].as_html()
     t0 = pd.read_html(t0, header=None)[0]
-    t0_ser1 = t0.loc[:, [0,1]].set_index(0)[1]
-    t0_ser1.index.name=''
-    t0_ser2 = t0.loc[:, [2,3]].set_index(2)[3].dropna()
-    t0_ser2.index.name=''
+    t0_ser1 = t0.loc[:, [0, 1]].set_index(0)[1]
+    t0_ser1.index.name = ''
+    t0_ser2 = t0.loc[:, [2, 3]].set_index(2)[3].dropna()
+    t0_ser2.index.name = ''
     t0 = pd.concat([t0_ser1, t0_ser2])
     t0.index = t0.index.str.replace(':', '')
     t2 = est.summary().tables[2].as_html()
     t2 = pd.read_html(t2, header=None)[0]
-    t2_ser1 = t2.loc[:, [0,1]].set_index(0)[1]
-    t2_ser1.index.name=''
-    t2_ser2 = t2.loc[:, [2,3]].set_index(2)[3].dropna()
-    t2_ser2.index.name=''
+    t2_ser1 = t2.loc[:, [0, 1]].set_index(0)[1]
+    t2_ser1.index.name = ''
+    t2_ser2 = t2.loc[:, [2, 3]].set_index(2)[3].dropna()
+    t2_ser2.index.name = ''
     t2 = pd.concat([t2_ser1, t2_ser2])
     t2.index = t2.index.str.replace(':', '')
     t = pd.concat([t0, t2])
@@ -378,7 +453,8 @@ def plot_MLR_const(ds):
     CI95_l = 10**CI95_l / 1e6
     years = pd.to_datetime(const.year.values, format='%Y')
     fig, ax = plt.subplots(figsize=(17, 10))
-    errors = np.array(list(zip((const.values-CI95_l.values), (CI95_u.values-const.values))))
+    errors = np.array(
+        list(zip((const.values-CI95_l.values), (CI95_u.values-const.values))))
     errors = np.abs(errors)
     g = ax.errorbar(years, const.values, errors.T, label='Mean Apartment')
     ax.set_xlabel('')
@@ -398,13 +474,73 @@ def plot_MLR_field(ds, field='VIF', title='Variance Inflation Factor'):
     df = df.rename(plot_names, axis=1)
     fig, ax = plt.subplots(figsize=(17, 10))
     g = sns.heatmap(df.T.round(2), annot=True, ax=ax, cmap='Reds')
-    g.set_xticklabels(g.get_xticklabels(), rotation = 30)
+    g.set_xticklabels(g.get_xticklabels(), rotation=30)
     ax.set_xlabel('')
     fig.suptitle(title)
     fig.tight_layout()
     return
     # matplotlib.rc_file_defaults()
     # ax = sns.set_style(style=None, rc=None )
+
+
+def plot_MLR_interpeted_results(ds):
+    import pandas as pd
+    import seaborn as sns
+    import matplotlib.pyplot as plt
+    import numpy as np
+    sns.set_theme(style='ticks', font_scale=1.8)
+    # matplotlib.rc_file_defaults()
+    # ax = sns.set_style(style=None, rc=None )
+    fig, ax = plt.subplots(2, 1, figsize=(17, 10))
+    ds = interpert_beta_coefs(ds, name='CI_95_upper')
+    ds = interpert_beta_coefs(ds, name='CI_95_lower')
+    ds = interpert_beta_coefs(ds, name='beta_coef')
+    ds = ds.drop_sel(regressor='const')
+    beta = ds['beta_coef_inter'].to_dataset('regressor').to_dataframe()
+    beta_dumm = beta[[x for x in beta.columns if x in dummies]]
+    beta_reg = beta[[x for x in beta.columns if x not in dummies]]
+    beta_dumm = beta_dumm.rename(plot_names, axis=1)
+    beta_reg = beta_reg.rename(plot_names, axis=1)
+    beta = beta.rename(plot_names, axis=1)
+    CI95_u = ds['CI_95_upper_inter'].to_dataset('regressor').to_dataframe()
+    CI95_u_dumm = CI95_u[[x for x in CI95_u.columns if x in dummies]]
+    CI95_u_reg = CI95_u[[x for x in CI95_u.columns if x not in dummies]]
+    CI95_u_dumm = CI95_u_dumm.rename(plot_names, axis=1)
+    CI95_u_reg = CI95_u_reg.rename(plot_names, axis=1)
+    CI95_l = ds['CI_95_lower_inter'].to_dataset('regressor').to_dataframe()
+    CI95_l_dumm = CI95_l[[x for x in CI95_l.columns if x in dummies]]
+    CI95_l_reg = CI95_l[[x for x in CI95_l.columns if x not in dummies]]
+    CI95_l_dumm = CI95_l_dumm.rename(plot_names, axis=1)
+    CI95_l_reg = CI95_l_reg.rename(plot_names, axis=1)
+    beta.index = pd.to_datetime(beta.index, format='%Y')
+    # plot dummies:
+    for reg in beta_dumm.columns:
+        errors = np.array(list(zip(
+            (beta_dumm[reg].values-CI95_l_dumm[reg].values), (CI95_u_dumm[reg].values-beta_dumm[reg].values))))
+        errors = np.abs(errors)
+        ax[0].errorbar(beta[reg].index, beta_dumm[reg].values,
+                       errors.T, label=reg, lw=2)
+    ax[0].legend(ncol=3, handleheight=0.1, labelspacing=0.01,
+                 loc='center left', fontsize=18)
+    ax[0].set_ylabel('Change in Apt. Price [%]')
+    ax[0].set_ylim(-40, 40)
+    ax[0].grid(True)
+
+    # plot regulars:
+    for reg in beta_reg.columns:
+        errors = np.array(list(zip(
+            (beta_reg[reg].values-CI95_l_reg[reg].values), (CI95_u_reg[reg].values-beta_reg[reg].values))))
+        errors = np.abs(errors)
+        ax[1].errorbar(beta[reg].index, beta_reg[reg].values,
+                       errors.T, label=reg, lw=2)
+    ax[1].legend(ncol=3, handleheight=0.1, labelspacing=0.01,
+                 loc='upper left', fontsize=18)
+    ax[1].set_ylabel('Change in Apt. Price due to\n10% change in predictors [%]')
+    ax[1].grid(True)
+    ax[1].set_ylim(-10, 20)
+    fig.tight_layout()
+    return fig
+
 
 def plot_MLR_results(ds):
     import pandas as pd
@@ -426,17 +562,21 @@ def plot_MLR_results(ds):
     beta.index = pd.to_datetime(beta.index, format='%Y')
     twinx = ax.twinx()
     for reg in beta.columns:
-        errors = np.array(list(zip((beta[reg].values-CI95_l[reg].values), (CI95_u[reg].values-beta[reg].values))))
+        errors = np.array(list(zip(
+            (beta[reg].values-CI95_l[reg].values), (CI95_u[reg].values-beta[reg].values))))
         errors = np.abs(errors)
-        ax.errorbar(beta[reg].index, beta[reg].values, errors.T, label=reg, lw=2)
+        ax.errorbar(beta[reg].index, beta[reg].values,
+                    errors.T, label=reg, lw=2)
     # sns.lineplot(data = df, marker='o', sort = False, ax=ax)
     # df.plot(legend=False, ax=ax, zorder=0)
-    ax.legend(ncol=3, handleheight=0.1, labelspacing=0.01, loc='upper left', fontsize=18)
+    ax.legend(ncol=3, handleheight=0.1, labelspacing=0.01,
+              loc='upper left', fontsize=18)
     ax.set_ylabel(r'$\beta$ coefficient')
     ax.grid(True)
     dfr2 = ds['R-squared'].to_dataframe()
     dfr2.index = pd.to_datetime(dfr2.index, format='%Y')
-    twinx.bar(beta.index, dfr2['R-squared'].values, width=350, color='k', alpha=0.2)
+    twinx.bar(beta.index, dfr2['R-squared'].values,
+              width=350, color='k', alpha=0.2)
     ax.set_ylim(-0.65, 0.65)
     twinx.set_ylim(0, 1)
     twinx.set_ylabel(r'R$^2$')
@@ -483,13 +623,14 @@ def plot_RF_FI_results(ds):
     import matplotlib.pyplot as plt
     sns.set_theme(style='ticks', font_scale=1.5)
     fig, ax = plt.subplots(figsize=(17, 10))
-    df = ds['feature_importances'].mean('repeats').to_dataset('regressor').to_dataframe()
+    df = ds['feature_importances'].mean(
+        'repeats').to_dataset('regressor').to_dataframe()
     df = df * 100
     df = df.rename(plot_names, axis=1)
     df.index = pd.to_datetime(df.index, format='%Y')
     x = df.index
-    ys=[df[x] for x in df.columns]
-    ax.stackplot(x,*ys, labels=[x for x in df.columns])
+    ys = [df[x] for x in df.columns]
+    ax.stackplot(x, *ys, labels=[x for x in df.columns])
     # df.plot(ax=ax, legend=False)
     ax.legend(loc='center', ncol=2, handleheight=0.1, labelspacing=0.01)
     # df_total = df.sum(axis=1)
@@ -505,6 +646,7 @@ def plot_RF_FI_results(ds):
     return fig
 
     return
+
 
 def run_CV_on_all_years(df, model_name='RF', savepath=ml_path, pgrid='normal',
                         year=None, year_start=2010):
@@ -530,6 +672,7 @@ def run_CV_on_all_years(df, model_name='RF', savepath=ml_path, pgrid='normal',
 
     return
 
+
 def produce_X_y_RF(df, y_name='Price', feats=best_rf):
     from sklearn.preprocessing import StandardScaler
     from sklearn.preprocessing import MinMaxScaler
@@ -554,8 +697,8 @@ def produce_X_y_RF(df, y_name='Price', feats=best_rf):
     Xscaler = StandardScaler()
     #yscaler = MinMaxScaler()
     # yscaler = PowerTransformer(method='yeo-johnson',standardize=True)
-    y2015 = y[y['Sale_year']==2015]
-    y2017 = y[y['Sale_year']==2017]
+    y2015 = y[y['Sale_year'] == 2015]
+    y2017 = y[y['Sale_year'] == 2017]
     y2015 = y2015.apply(np.log10)
     y2017 = y2017.apply(np.log10)
     # y_scaled = yscaler.fit_transform(y_scaled.values.reshape(-1,1))
@@ -564,15 +707,15 @@ def produce_X_y_RF(df, y_name='Price', feats=best_rf):
     # scale X:
     cols_to_scale = [x for x in X.columns if x != 'Sale_year']
     X, scaler = scale_df(X, cols=cols_to_scale, scaler=Xscaler)
-    X2015 = X[X['Sale_year']==2015]
+    X2015 = X[X['Sale_year'] == 2015]
     X2015.drop('SEI_value_2017', axis=1, inplace=True)
-    X2017 = X[X['Sale_year']==2017]
+    X2017 = X[X['Sale_year'] == 2017]
     X2017.drop('SEI_value_2015', axis=1, inplace=True)
     X2015 = X2015.rename({'SEI_value_2015': 'SEI'}, axis=1)
     X2017 = X2017.rename({'SEI_value_2017': 'SEI'}, axis=1)
     y2015 = y2015[y_name]
     y2017 = y2017[y_name]
-    return X2015,y2015, X2017, y2017, Xscaler
+    return X2015, y2015, X2017, y2017, Xscaler
 
 
 def produce_X_y(df, year=2015, y_name='Price', plot_Xcorr=True,
@@ -586,7 +729,12 @@ def produce_X_y(df, year=2015, y_name='Price', plot_Xcorr=True,
     import pandas as pd
     # first, subset for year:
     # df = df[df['Type_of_asset'].isin(apts_more)]
-    df = df[df['Sale_year'] == year]
+    if year is not None:
+        df = df[df['Sale_year'] == year]
+    else:
+        years = pd.get_dummies(data=df['Sale_year'], prefix='year')
+        # drop one col from one-hot encoding not to fall into dummy trap!:
+        df = pd.concat([df, years.drop('year_2000', axis=1)], axis=1)
     # now slice for the features:
     if feats is not None:
         print('picking {} as features.'.format(feats))
@@ -618,21 +766,28 @@ def produce_X_y(df, year=2015, y_name='Price', plot_Xcorr=True,
         # drop one col from one-hot encoding not to fall into dummy trap!:
         X = pd.concat([X, rooms.drop('Rooms_4', axis=1)], axis=1)
         X = X.drop([dummy], axis=1)
-    # scale Floor numbers:
-    if 'Floor_number' in X.columns:
-        X['Floor_number'] = np.log(X['Floor_number']+1)
-    if 'Total_ends' in X.columns:
-        X['Total_ends'] = np.log(X['Total_ends']+1)
-    if any(X.columns.str.contains('mean_distance')):
-        col = X.loc[:, X.columns.str.contains('mean_distance')].columns[0]
-        X[col] = np.log(X[col])
-    if 'distance_to_nearest_kindergarten' in X.columns:
-        X['distance_to_nearest_kindergarten'] = np.log(
-            X['distance_to_nearest_kindergarten'])
-    if 'distance_to_nearest_school' in X.columns:
-        X['distance_to_nearest_school'] = np.log(X['distance_to_nearest_school'])
-    if 'mean_distance_to_28_mokdim' in X.columns:
-        X['mean_distance_to_28_mokdim'] = np.log(X['mean_distance_to_28_mokdim'])
+    # scale to log all non-dummy variables:
+    # dummies = ['New', 'Rooms_3', 'Rooms_5']
+    if year is None:
+        dumm = dummies + ['year_{}'.format(x) for x in np.arange(2001, 2020)]
+    else:
+        dumm = dummies
+    X = scale_log(X, cols=[x for x in X.columns if x not in dumm], plus1_cols=['Total_ends', 'Floor_number'])
+    # # scale Floor numbers:
+    # if 'Floor_number' in X.columns:
+    #     X['Floor_number'] = np.log(X['Floor_number']+1)
+    # if 'Total_ends' in X.columns:
+    #     X['Total_ends'] = np.log(X['Total_ends']+1)
+    # if any(X.columns.str.contains('mean_distance')):
+    #     col = X.loc[:, X.columns.str.contains('mean_distance')].columns[0]
+    #     X[col] = np.log(X[col])
+    # if 'distance_to_nearest_kindergarten' in X.columns:
+    #     X['distance_to_nearest_kindergarten'] = np.log(
+    #         X['distance_to_nearest_kindergarten'])
+    # if 'distance_to_nearest_school' in X.columns:
+    #     X['distance_to_nearest_school'] = np.log(X['distance_to_nearest_school'])
+    # if 'mean_distance_to_28_mokdim' in X.columns:
+    #     X['mean_distance_to_28_mokdim'] = np.log(X['mean_distance_to_28_mokdim'])
     # X['Year_Built'] = np.log(X['Year_Built'])
     # if city_code col exist, drop it:
     if 'city_code' in X.columns:
@@ -646,7 +801,8 @@ def produce_X_y(df, year=2015, y_name='Price', plot_Xcorr=True,
     # y_scaled = yscaler.fit_transform(y_scaled.values.reshape(-1,1))
     y = pd.DataFrame(y_scaled, columns=[y_name])
     if scale_X:
-        X, scaler = scale_df(X, scaler=Xscaler, cols=[x for x in X.columns if 'New' not in x])
+        X, scaler = scale_df(X, scaler=Xscaler, cols=[
+                             x for x in X.columns if 'New' not in x])
         y, scaler = scale_df(y, scaler=Xscaler)
     else:
         scaler = Xscaler
@@ -863,7 +1019,7 @@ def plot_feature_importances(fi, year=2017, mode='beta'):
     sns.set_theme(style='ticks', font_scale=1.5)
     fig, ax = plt.subplots(figsize=(17, 5))
     if not isinstance(fi, pd.DataFrame):
-        fi=fi.drop_sel(regressor='Sale_year')
+        fi = fi.drop_sel(regressor='Sale_year')
         df = convert_da_to_long_form_df(fi, value_name='feature_importances')
         df = df.sort_values('feature_importances')
         df['regressor'] = df['regressor'].map(plot_names)
