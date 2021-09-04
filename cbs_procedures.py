@@ -602,6 +602,30 @@ def calculate_building_growth_rate_constant(bdf, eyear=2019, syear=2006, phase='
     return df
 
 
+def read_price_index(path=work_david,
+                     filename='price_index_CBS_2000-2021.xlsx',
+                     resample='AS'):
+    import pandas as pd
+    df = pd.read_excel(path/filename, skiprows=22)
+    df.columns = ['item', 'year', 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+    df['item'] = df['item'].str.replace(
+        '120010 - מדד המחירים לצרכן - כללי', 'price_index')
+    df['item'] = df['item'].str.replace(
+        '110040 - המדד ללא דיור', 'price_index_without_housing')
+    df = df.melt(var_name='month', id_vars=[
+                 'item', 'year'], value_name='index_value')
+    df['dt'] = pd.to_datetime(df['year'].astype(
+        str) + '-' + df['month'].astype(str), format='%Y-%m')
+    df.drop(['month', 'year'], axis=1, inplace=True)
+    df = df.pivot_table(index=['dt'], columns=['item'])
+    df.columns = df.columns.droplevel(0)
+    df.index.name = ''
+    if resample is not None:
+        print('resampling to {}'.format(resample))
+        df = df.resample(resample).mean()
+    return df
+
+
 def read_boi_mortgage(path=work_david, filename='pribmash.xls',
                       rolling=6):
     import pandas as pd
