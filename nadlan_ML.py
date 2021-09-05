@@ -34,11 +34,11 @@ best_for_bs = best + ['city_code', 'Price']
 next_best = ['Floor_number', 'New', 'Sale_year', 'Rooms',
              'Total_ends']
 
-best_rf = ['Floor_number', 'SEI_value_2015', 'SEI_value_2017',
-           'New', 'Sale_year', 'Rooms','Netflow','MISH',
+best_rf = ['SEI_value_2015', 'SEI_value_2017',
+           'New', 'Sale_year', 'Rooms','Netflow',
            'Total_ends', 'mean_distance_to_28_mokdim']
 
-dummies = ['New', 'Rooms_4', 'Rooms_5', 'MISH']
+dummies = ['New', 'Rooms_4', 'Rooms_5']
 
 year_dummies = ['year_{}'.format(x) for x in np.arange(2001,2020)]
 
@@ -66,18 +66,26 @@ plot_names = {'Floor_number': 'Floor',
 # AHP : Afforable Housing Program
 
 
-def prepare_new_X_y(df):
-    import statsmodels.api as sm
-    X,y,scaler=produce_X_y(df,year=None,feats=best_years, dummy='Rooms_345',plot_Xcorr=True,scale_X=False)
-    Xs=[]
+def select_years_interaction_term(ds, regressor='SEI'):
+    regs = ['{}_{}'.format(x, regressor) for x in year_dummies]
+    ds = ds.sel(regressor=regs)
+    return ds
+
+
+def prepare_new_X_y(df, y_name='Price_inflation_fixed'):
+    import pandas as pd
+    X, y, scaler = produce_X_y(
+        df, y_name=y_name, year=None, feats=best_years, dummy='Rooms_345', plot_Xcorr=True, scale_X=False)
+    Xs = []
     for numer in best_regular:
-        X1=get_design_with_pair_interaction(X,year_dummies+room_dummies+['New']+[numer])
+        X1 = get_design_with_pair_interaction(
+            X, year_dummies+room_dummies+['New']+[numer])
         Xs.append(X1)
 
-    X1=pd.concat(Xs,axis=1)
-    X2 = sm.add_constant(X1)
-    est = sm.OLS(y, X2)
-    est = est.fit()
+    X1 = pd.concat(Xs, axis=1)
+    X1 = X1.loc[:, ~X1.columns.duplicated()]
+    return X1, y
+
 
 def get_design_with_pair_interaction(data, group_pair):
     """ Get the design matrix with the pairwise interactions
@@ -373,6 +381,14 @@ def scale_df(df, scaler, cols=None):
 
 def load_nadlan_with_features(path=work_david, years=[2000, 2019], asset_type=apts, mokdim_version=False):
     import pandas as pd
+    from cbs_procedures import read_price_index
+
+    def add_inflation_func(grp, pi,name='Price_inflation_fixed'):
+        year = grp['Sale_year'].unique()[0]
+        weight = pi.loc[str(year)].item()
+        grp[name] = weight*grp['Price']
+        return grp
+
     if mokdim_version:
         df = pd.read_csv(
             path/'Nadaln_with_features_and_distance_to_employment_centers.csv', na_values='None')
@@ -390,9 +406,12 @@ def load_nadlan_with_features(path=work_david, years=[2000, 2019], asset_type=ap
         df['Netflow'] = df['Inflow']-df['Outflow']
         # shift the 0 of netflow to +10000 so that i could
         # use np.log afterwards in features preproccesing
-        df['Netflow'] += 10000
         # also shift the SEI +3 for the log:
-        df['SEI'] += 3
+        # df['SEI'] += 3
+        # now use price inflation fixing:
+        # pi = read_price_index()['price_index_without_housing']
+        # pi = 100 / pi
+        # df = df.groupby('Sale_year').apply(add_inflation_func, pi)
     return df
 
 
@@ -858,7 +877,7 @@ def produce_X_y_RF(df, y_name='Price', feats=best_rf):
     #yscaler = MinMaxScaler()
     # yscaler = PowerTransformer(method='yeo-johnson',standardize=True)
     y_train = y[y['Sale_year'].isin([2015, 2016])]
-    y_test = y[y['Sale_year'].isin([2016,2017])]
+    y_test = y[y['Sale_year'].isin([2016, 2017])]
     # y_train = y_train.apply(np.log)
     # y_test = y_test.apply(np.log)
     # # y_scaled = yscaler.fit_transform(y_scaled.values.reshape(-1,1))
@@ -887,6 +906,7 @@ def produce_X_y(df, year=2015, y_name='Price', plot_Xcorr=True,
     from sklearn.preprocessing import MinMaxScaler
     import numpy as np
     import pandas as pd
+    print('Choosing {} as target var (y)'.format(y_name))
     # first, subset for year:
     # df = df[df['Type_of_asset'].isin(apts_more)]
     if year is not None:
@@ -906,6 +926,12 @@ def produce_X_y(df, year=2015, y_name='Price', plot_Xcorr=True,
         X['New'] = X['New'].astype(int)
     if 'Has_ground_floor' in X.columns:
         X['Has_ground_floor'] = X['Has_ground_floor'].astype(int)
+    # scale Netflow to 10,000 poeple:
+    if 'Netflow' in X.columns:
+        X['Netflow'] /= 10000
+    # scale mean distance to 100 kms:
+    if 'mean_distance_to_28_mokdim' in X.columns:
+        X['mean_distance_to_28_mokdim'] /= 100
     y = y.reset_index(drop=True)
     # df['Rooms'] = df['Rooms'].astype(int)
     # df['Floor_number'] = df['Floor_number'].astype(int)
@@ -932,7 +958,7 @@ def produce_X_y(df, year=2015, y_name='Price', plot_Xcorr=True,
         dumm = dummies + ['year_{}'.format(x) for x in np.arange(2001, 2020)]
     else:
         dumm = dummies
-    X = scale_log(X, cols=[x for x in X.columns if x not in dumm], plus1_cols=[
+    X = scale_log(X, cols=['Total_ends'], plus1_cols=[
                   'Total_ends', 'Floor_number'])
     # # scale Floor numbers:
     # if 'Floor_number' in X.columns:
@@ -1441,11 +1467,11 @@ class ML_Classifier_Switcher(object):
                                'min_samples_split': [2, 5],
                                'n_estimators': [100, 300]}
         elif self.pgrid == 'normal':
-            self.param_grid = {'max_depth': [10, 15, 20],
+            self.param_grid = {'max_depth': [15, 25],
                                'max_features': ['auto'],
-                               'min_samples_leaf': [2, 5, 10],
-                               'min_samples_split': [5, 10, 15],
-                               'n_estimators': [300, 500, 700]
+                               'min_samples_leaf': [2, 5],
+                               'min_samples_split': [2, 5],
+                               'n_estimators': [500, 700]
                                }
         elif self.pgrid == 'dense':
             self.param_grid = {'max_depth': [5, 10, 25, 50, 100, 150, 250],
