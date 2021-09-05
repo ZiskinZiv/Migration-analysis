@@ -25,8 +25,8 @@ features2 = ['FLOORNO', 'DEALNATURE', 'NEWPROJECTTEXT',
 features3 = ['Floor_number', 'SEI', 'New', 'Periph_value', 'Sale_year', 'Rooms_345',
              'Total_ends', 'mean_distance_to_4_mokdim']
 
-best = ['Floor_number', 'SEI', 'New', 'Sale_year', 'Rooms_345',
-        'Total_ends', 'mean_distance_to_28_mokdim', 'Netflow', 'MISH']
+best = ['SEI', 'New', 'Sale_year', 'Rooms_345',
+        'Total_ends', 'mean_distance_to_28_mokdim', 'Netflow']
 
 best_years = best + ['year_{}'.format(x) for x in np.arange(2001, 2020)]
 best_for_bs = best + ['city_code', 'Price']
@@ -35,27 +35,92 @@ next_best = ['Floor_number', 'New', 'Sale_year', 'Rooms',
              'Total_ends']
 
 best_rf = ['Floor_number', 'SEI_value_2015', 'SEI_value_2017',
-           'New', 'Sale_year', 'Rooms',
+           'New', 'Sale_year', 'Rooms','Netflow','MISH',
            'Total_ends', 'mean_distance_to_28_mokdim']
 
-dummies = ['New', 'Rooms_3', 'Rooms_5', 'MISH']
+dummies = ['New', 'Rooms_4', 'Rooms_5', 'MISH']
+
+year_dummies = ['year_{}'.format(x) for x in np.arange(2001,2020)]
+
+room_dummies = ['Rooms_4', 'Rooms_5']
+
+best_regular = ['SEI', 'Total_ends', 'mean_distance_to_28_mokdim', 'Netflow']
 
 apts = ['דירה', 'דירה בבית קומות']
 apts_more = apts + ["קוטג' דו משפחתי", "קוטג' חד משפחתי",
                     "דירת גן", "בית בודד", "דירת גג", "דירת גג (פנטהאוז)"]
 plot_names = {'Floor_number': 'Floor',
-              'New': 'New Apartment',
+              # 'New': 'New Apartment',
               'Periph_value': 'Peripheriality',
               'distance_to_nearest_kindergarten': 'Nearest kindergarten',
               'distance_to_nearest_school': 'Nearest school',
               'Total_ends': 'Building rate',
-              'mean_distance_to_28_mokdim': 'Distance to Employment Centers',
-              'SEI': 'Social-Economic Index',
+              'mean_distance_to_28_mokdim': 'Distance to ECs',
+              # 'SEI': 'Social-Economic Index',
               'SEI_value_2015': 'Social-Economic Index',
               'SEI_value_2017': 'Social-Economic Index',
               'Rooms': 'Rooms', 'Rooms_3': '3 Rooms', 'Rooms_5': '5 Rooms',
-              'Netflow': 'Net migration'
+              'Netflow': 'Net migration',
+              'MISH': 'AHP'
               }
+# AHP : Afforable Housing Program
+
+
+def prepare_new_X_y(df):
+    import statsmodels.api as sm
+    X,y,scaler=produce_X_y(df,year=None,feats=best_years, dummy='Rooms_345',plot_Xcorr=True,scale_X=False)
+    Xs=[]
+    for numer in best_regular:
+        X1=get_design_with_pair_interaction(X,year_dummies+room_dummies+['New']+[numer])
+        Xs.append(X1)
+
+    X1=pd.concat(Xs,axis=1)
+    X2 = sm.add_constant(X1)
+    est = sm.OLS(y, X2)
+    est = est.fit()
+
+def get_design_with_pair_interaction(data, group_pair):
+    """ Get the design matrix with the pairwise interactions
+
+    Parameters
+    ----------
+    data (pandas.DataFrame):
+       Pandas data frame with the two variables to build the design matrix of their two main effects and their interaction
+    group_pair (iterator):
+       List with the name of the two variables (name of the columns) to build the design matrix of their two main effects and their interaction
+
+    Returns
+    -------
+    x_new (pandas.DataFrame):
+       Pandas data frame with the design matrix of their two main effects and their interaction
+
+    """
+    import pandas as pd
+    import itertools
+    x = pd.get_dummies(data[group_pair])
+    interactions_lst = list(
+        itertools.combinations(
+            x.columns.tolist(),
+            2,
+        ),
+    )
+    x_new = x.copy()
+    for level_1, level_2 in interactions_lst:
+        if level_1.split('_')[0] == level_2.split('_')[0]:
+            continue
+        x_new = pd.concat(
+            [
+                x_new,
+                x[level_1] * x[level_2]
+            ],
+            axis=1,
+        )
+        x_new = x_new.rename(
+            columns = {
+                0: (level_1 + '_' + level_2)
+            }
+        )
+    return x_new
 
 
 def calculate_distance_from_gdf_to_employment_centers(gdf, path=work_david, n=4,
@@ -223,10 +288,15 @@ def calc_vif(X, dropna=True, asfloat=True, remove_mean=True):
 def interpert_beta_coefs(ds, name='beta_coef', dummies=dummies):
     import numpy as np
     import xarray as xr
-    df = ds[name].to_dataset('regressor').to_dataframe()
+    ds1 = ds[name].to_dataset('regressor')
+    if len(ds1.dims) == 0:
+        df = ds1.expand_dims('dumm').to_dataframe()
+    else:
+        df = ds1.to_dataframe()
     betas = []
     # interpet dummy variables:
     for dummy in dummies:
+        print('interperting {} variable.'.format(dummy))
         ser = 100*(np.exp(df[dummy])-1)
         da = ser.to_xarray()
         betas.append(da)
@@ -235,7 +305,10 @@ def interpert_beta_coefs(ds, name='beta_coef', dummies=dummies):
     regulars = [x for x in ds['regressor'].values if x not in dummies]
     if 'const' in regulars:
         regulars.remove('const')
+    if 'dumm' in regulars:
+        regulars.remove('dumm')
     for regular in regulars:
+        print('interperting {} variable.'.format(regular))
         ser = 100*(1.1**df[regular]-1)
         da = ser.to_xarray()
         betas.append(da)
@@ -243,9 +316,12 @@ def interpert_beta_coefs(ds, name='beta_coef', dummies=dummies):
     da = np.exp(df['const']).to_xarray()
     betas.append(da)
     beta = xr.merge(betas)
-    beta = beta.to_array('regressor')
+    try:
+        beta = beta.to_array('regressor').drop('dumm')
+    except ValueError:
+        beta = beta.to_array('regressor')
     # beta = beta.sortby(ds['regressor'])
-    ds['{}_inter'.format(name)] = beta.transpose()
+    ds['{}_inter'.format(name)] = beta.transpose().squeeze()
     return ds
 
 
@@ -397,7 +473,7 @@ def convert_statsmodels_object_results_to_xarray(est):
     return ds
 
 
-def run_MLR_on_all_years(df, feats=features, dummy='Rooms_345', scale_X=True):
+def run_MLR_on_all_years(df, feats=features, dummy='Rooms_345', scale_X=False):
     import numpy as np
     import xarray as xr
     import statsmodels.api as sm
@@ -439,30 +515,30 @@ def run_MLR_on_all_years(df, feats=features, dummy='Rooms_345', scale_X=True):
     return ds
 
 
-def plot_MLR_const(ds):
-    import seaborn as sns
-    import matplotlib.pyplot as plt
-    import pandas as pd
-    import numpy as np
-    df = ds['P>|t|'].to_dataset('regressor').to_dataframe()
-    sns.set_theme(style='ticks', font_scale=1.8)
-    const = 10**(ds['beta_coef'].sel(regressor='const')) / 1e6
-    CI95_u = ds['CI_95_upper'].to_dataset('regressor').to_dataframe()['const']
-    CI95_l = ds['CI_95_lower'].to_dataset('regressor').to_dataframe()['const']
-    CI95_u = 10**CI95_u / 1e6
-    CI95_l = 10**CI95_l / 1e6
-    years = pd.to_datetime(const.year.values, format='%Y')
-    fig, ax = plt.subplots(figsize=(17, 10))
-    errors = np.array(
-        list(zip((const.values-CI95_l.values), (CI95_u.values-const.values))))
-    errors = np.abs(errors)
-    g = ax.errorbar(years, const.values, errors.T, label='Mean Apartment')
-    ax.set_xlabel('')
-    ax.legend()
-    ax.grid(True)
-    ax.set_ylabel('Price [Millions NIS]')
-    fig.tight_layout()
-    return
+# def plot_MLR_const(ds):
+#     import seaborn as sns
+#     import matplotlib.pyplot as plt
+#     import pandas as pd
+#     import numpy as np
+#     df = ds['P>|t|'].to_dataset('regressor').to_dataframe()
+#     sns.set_theme(style='ticks', font_scale=1.8)
+#     const = 10**(ds['beta_coef'].sel(regressor='const')) / 1e6
+#     CI95_u = ds['CI_95_upper'].to_dataset('regressor').to_dataframe()['const']
+#     CI95_l = ds['CI_95_lower'].to_dataset('regressor').to_dataframe()['const']
+#     CI95_u = 10**CI95_u / 1e6
+#     CI95_l = 10**CI95_l / 1e6
+#     years = pd.to_datetime(const.year.values, format='%Y')
+#     fig, ax = plt.subplots(figsize=(17, 10))
+#     errors = np.array(
+#         list(zip((const.values-CI95_l.values), (CI95_u.values-const.values))))
+#     errors = np.abs(errors)
+#     g = ax.errorbar(years, const.values, errors.T, label='Mean Apartment')
+#     ax.set_xlabel('')
+#     ax.legend()
+#     ax.grid(True)
+#     ax.set_ylabel('Price [Millions NIS]')
+#     fig.tight_layout()
+#     return
 
 
 def plot_MLR_field(ds, field='VIF', title='Variance Inflation Factor'):
@@ -483,12 +559,88 @@ def plot_MLR_field(ds, field='VIF', title='Variance Inflation Factor'):
     # ax = sns.set_style(style=None, rc=None )
 
 
+def run_MLR_years_as_dummies(df):
+    import statsmodels.api as sm
+    X, y, scaler = produce_X_y(
+        df, year=None, feats=best_years, dummy='Rooms_345', plot_Xcorr=True, scale_X=False)
+    X2 = sm.add_constant(X)
+    est = sm.OLS(y, X2)
+    est = est.fit()
+    ds = convert_statsmodels_object_results_to_xarray(est)
+    return ds
+
+
+def plot_MLR_years_as_dummies_interpeted_results(ds):
+    import numpy as np
+    import seaborn as sns
+    import matplotlib.pyplot as plt
+    import pandas as pd
+    import matplotlib.ticker as ticker
+
+    def convert_da_to_df(ds, da='beta_coef_inter'):
+        df = ds[da].to_dataset('regressor').expand_dims('dumm').to_dataframe()
+        return df
+
+    def create_errors_from_CI(value, CI_lower, CI_upper):
+        err_l = (value-CI_lower).abs().squeeze()
+        err_u = (CI_upper-value).abs().squeeze()
+        err = np.array(list(zip(err_l.values, err_u.values))).T
+        err = pd.DataFrame(err)
+        err.columns = value.columns
+        err.index = ['lower', 'upper']
+        return err
+
+    sns.set_theme(style='ticks', font_scale=1.5)
+    ds = interpert_beta_coefs(ds, name='CI_95_upper', dummies=dummies+year_dummies)
+    ds = interpert_beta_coefs(ds, name='CI_95_lower', dummies=dummies+year_dummies)
+    ds = interpert_beta_coefs(ds, name='beta_coef', dummies=dummies+year_dummies)
+    ds = ds.drop_sel(regressor='const')
+    beta = convert_da_to_df(ds, da='beta_coef_inter')
+    upper = convert_da_to_df(ds, da='CI_95_upper_inter')
+    lower = convert_da_to_df(ds, da='CI_95_lower_inter')
+    errors = create_errors_from_CI(beta, lower, upper)
+    # split to years, dummies and regular vars:
+    beta_years = beta[[x for x in beta.columns if 'year' in x]].T
+    years = pd.to_datetime(np.arange(2001, 2020), format='%Y')
+    beta_years.index = years
+    beta_years.columns = ['beta']
+    err_years = errors[[x for x in errors.columns if 'year' in x]]
+    beta_dumm = beta[[x for x in beta.columns if x in dummies]].rename(plot_names, axis=1)
+    err_dumm = errors[[x for x in errors.columns if x in dummies]]
+    beta_reg = beta[[x for x in beta.columns if x not in dummies+year_dummies]].rename(plot_names, axis=1)
+    err_reg = errors[[x for x in errors.columns if x not in dummies+year_dummies]]
+    # plot, define axes:
+    fig = plt.figure(figsize=(17,10),constrained_layout=True)
+    gs1 = fig.add_gridspec(nrows=2, ncols=2, left=0.05, wspace=0.05)
+    ax_years = fig.add_subplot(gs1[1, 0:])
+    ax_reg = fig.add_subplot(gs1[0, 0])
+    ax_dumm = fig.add_subplot(gs1[0, 1])
+    beta_years.plot(kind='bar', yerr=err_years.values, ax=ax_years, legend=False, color='tab:blue')
+    ax_years.set_xticklabels([x.strftime("%Y") for x in beta_years.index], rotation=45)
+    ax_years.set_ylabel('Price change from year 2000 [%]')
+    ax_years.grid(axis='y')
+    beta_dumm.squeeze().plot(kind='barh', xerr=err_dumm.values, ax=ax_dumm,
+                             color=['tab:orange', 'tab:green', 'tab:red', 'tab:purple'])
+    ax_dumm.grid(True, axis='x', which='major')
+    ax_dumm.set_xlabel('Price change from baseline category [%]')
+    beta_reg.squeeze().plot(kind='barh', xerr=err_reg.values, ax=ax_reg,
+                            color = ['tab:brown', 'tab:pink', 'tab:gray', 'tab:olive', 'tab:cyan'])
+    ax_reg.grid(True, axis='x', which='major')
+    ax_reg.set_xlabel('Price change due to 10% change in predictor [%]')
+    # df = df.rename(plot_names, axis=1)
+    # ax[0].bar(beta_years.index, beta_years.values, yerr=err_years.values, align='center', alpha=0.5, ecolor='black', capsize=10)
+    # ax[0].errorbar(beta_years.index, beta_years.values,
+    #                err_years.values, lw=2)
+
+    return errors, beta
+
+
 def plot_MLR_interpeted_results(ds):
     import pandas as pd
     import seaborn as sns
     import matplotlib.pyplot as plt
     import numpy as np
-    sns.set_theme(style='ticks', font_scale=1.8)
+    sns.set_theme(style='ticks', font_scale=1.5)
     # matplotlib.rc_file_defaults()
     # ax = sns.set_style(style=None, rc=None )
     fig, ax = plt.subplots(2, 1, figsize=(17, 10))
@@ -514,30 +666,33 @@ def plot_MLR_interpeted_results(ds):
     CI95_l_reg = CI95_l_reg.rename(plot_names, axis=1)
     beta.index = pd.to_datetime(beta.index, format='%Y')
     # plot dummies:
-    for reg in beta_dumm.columns:
+    colors = ['tab:orange', 'tab:green', 'tab:red', 'tab:purple']
+    for i, reg in enumerate(beta_dumm.columns):
         errors = np.array(list(zip(
             (beta_dumm[reg].values-CI95_l_dumm[reg].values), (CI95_u_dumm[reg].values-beta_dumm[reg].values))))
         errors = np.abs(errors)
         ax[0].errorbar(beta[reg].index, beta_dumm[reg].values,
-                       errors.T, label=reg, lw=2)
-    ax[0].legend(ncol=3, handleheight=0.1, labelspacing=0.01,
+                       errors.T, label=reg, lw=2, color=colors[i])
+    ax[0].legend(ncol=2, handleheight=0.1, labelspacing=0.01,
                  loc='center left', fontsize=18)
-    ax[0].set_ylabel('Change in Apt. Price [%]')
+    ax[0].set_ylabel('Price change from\nbaseline category [%]')
     ax[0].set_ylim(-40, 40)
     ax[0].grid(True)
 
     # plot regulars:
-    for reg in beta_reg.columns:
+    colors = ['tab:brown', 'tab:pink', 'tab:gray', 'tab:olive', 'tab:cyan']
+    for i, reg in enumerate(beta_reg.columns):
         errors = np.array(list(zip(
             (beta_reg[reg].values-CI95_l_reg[reg].values), (CI95_u_reg[reg].values-beta_reg[reg].values))))
         errors = np.abs(errors)
         ax[1].errorbar(beta[reg].index, beta_reg[reg].values,
-                       errors.T, label=reg, lw=2)
-    ax[1].legend(ncol=3, handleheight=0.1, labelspacing=0.01,
-                 loc='upper left', fontsize=18)
-    ax[1].set_ylabel('Change in Apt. Price due to\n10% change in predictors [%]')
+                       errors.T, label=reg, lw=2, color=colors[i])
+    ax[1].legend(ncol=2, handleheight=0.1, labelspacing=0.01,
+                 loc='upper right', fontsize=18)
+    ax[1].set_ylabel(
+        'Price change due to\n10% change in predictor [%]')
     ax[1].grid(True)
-    ax[1].set_ylim(-10, 20)
+    ax[1].set_ylim(-10, 30)
     fig.tight_layout()
     return fig
 
@@ -674,11 +829,11 @@ def run_CV_on_all_years(df, model_name='RF', savepath=ml_path, pgrid='normal',
 
 
 def produce_X_y_RF(df, y_name='Price', feats=best_rf):
-    from sklearn.preprocessing import StandardScaler
-    from sklearn.preprocessing import MinMaxScaler
+    # from sklearn.preprocessing import StandardScaler
+    # from sklearn.preprocessing import MinMaxScaler
     import numpy as np
     import pandas as pd
-    df = df[df['Sale_year'].isin([2015, 2017])]
+    df = df[df['Sale_year'].isin([2015, 2016, 2017, 2018])]
     if feats is not None:
         print('picking {} as features.'.format(feats))
         X = df[feats].dropna()
@@ -686,36 +841,41 @@ def produce_X_y_RF(df, y_name='Price', feats=best_rf):
     X = X.reset_index(drop=True)
     if 'New' in X.columns:
         X['New'] = X['New'].astype(int)
+    if 'MISH' in X.columns:
+        X['MISH'] = X['MISH'].astype(int)
     y = y.reset_index(drop=True)
-    if 'Floor_number' in X.columns:
-        X['Floor_number'] = np.log(X['Floor_number']+1)
-    if 'Total_ends' in X.columns:
-        X['Total_ends'] = np.log(X['Total_ends']+1)
-    if any(X.columns.str.contains('mean_distance')):
-        col = X.loc[:, X.columns.str.contains('mean_distance')].columns[0]
-        X[col] = np.log(X[col])
-    Xscaler = StandardScaler()
+    # if dummy is not None:
+    #     prefix = dummy.split('_')[0]
+    #     rooms = pd.get_dummies(data=X[dummy], prefix=prefix)
+    #     # drop one col from one-hot encoding not to fall into dummy trap!:
+    #     X = pd.concat([X, rooms.drop('Rooms_4', axis=1)], axis=1)
+    #     X = X.drop([dummy], axis=1)
+
+    # X = scale_log(X, cols=[x for x in X.columns if x not in dummies], plus1_cols=[
+    #               'Total_ends', 'Floor_number'])
+
+    # Xscaler = StandardScaler()
     #yscaler = MinMaxScaler()
     # yscaler = PowerTransformer(method='yeo-johnson',standardize=True)
-    y2015 = y[y['Sale_year'] == 2015]
-    y2017 = y[y['Sale_year'] == 2017]
-    y2015 = y2015.apply(np.log10)
-    y2017 = y2017.apply(np.log10)
-    # y_scaled = yscaler.fit_transform(y_scaled.values.reshape(-1,1))
-    y2015 = pd.DataFrame(y2015, columns=[y_name])
-    y2017 = pd.DataFrame(y2017, columns=[y_name])
+    y_train = y[y['Sale_year'].isin([2015, 2016])]
+    y_test = y[y['Sale_year'].isin([2016,2017])]
+    # y_train = y_train.apply(np.log)
+    # y_test = y_test.apply(np.log)
+    # # y_scaled = yscaler.fit_transform(y_scaled.values.reshape(-1,1))
+    # y_train = pd.DataFrame(y_train, columns=[y_name])
+    # y_test = pd.DataFrame(y_test, columns=[y_name])
     # scale X:
-    cols_to_scale = [x for x in X.columns if x != 'Sale_year']
-    X, scaler = scale_df(X, cols=cols_to_scale, scaler=Xscaler)
-    X2015 = X[X['Sale_year'] == 2015]
-    X2015.drop('SEI_value_2017', axis=1, inplace=True)
-    X2017 = X[X['Sale_year'] == 2017]
-    X2017.drop('SEI_value_2015', axis=1, inplace=True)
-    X2015 = X2015.rename({'SEI_value_2015': 'SEI'}, axis=1)
-    X2017 = X2017.rename({'SEI_value_2017': 'SEI'}, axis=1)
-    y2015 = y2015[y_name]
-    y2017 = y2017[y_name]
-    return X2015, y2015, X2017, y2017, Xscaler
+    # cols_to_scale = [x for x in X.columns if x != 'Sale_year']
+    # X, scaler = scale_df(X, cols=cols_to_scale, scaler=Xscaler)
+    X_train = X[X['Sale_year'].isin([2015, 2016])].drop('Sale_year', axis=1)
+    X_train.drop('SEI_value_2017', axis=1, inplace=True)
+    X_test = X[X['Sale_year'].isin([2016, 2017])].drop('Sale_year', axis=1)
+    X_test.drop('SEI_value_2015', axis=1, inplace=True)
+    X_train = X_train.rename({'SEI_value_2015': 'SEI'}, axis=1)
+    X_test = X_test.rename({'SEI_value_2017': 'SEI'}, axis=1)
+    y_train = y_train[y_name]
+    y_test = y_test[y_name]
+    return X_train, y_train, X_test, y_test # , Xscaler
 
 
 def produce_X_y(df, year=2015, y_name='Price', plot_Xcorr=True,
@@ -764,7 +924,7 @@ def produce_X_y(df, year=2015, y_name='Price', plot_Xcorr=True,
         prefix = dummy.split('_')[0]
         rooms = pd.get_dummies(data=X[dummy], prefix=prefix)
         # drop one col from one-hot encoding not to fall into dummy trap!:
-        X = pd.concat([X, rooms.drop('Rooms_4', axis=1)], axis=1)
+        X = pd.concat([X, rooms.drop('Rooms_3', axis=1)], axis=1)
         X = X.drop([dummy], axis=1)
     # scale to log all non-dummy variables:
     # dummies = ['New', 'Rooms_3', 'Rooms_5']
@@ -772,7 +932,8 @@ def produce_X_y(df, year=2015, y_name='Price', plot_Xcorr=True,
         dumm = dummies + ['year_{}'.format(x) for x in np.arange(2001, 2020)]
     else:
         dumm = dummies
-    X = scale_log(X, cols=[x for x in X.columns if x not in dumm], plus1_cols=['Total_ends', 'Floor_number'])
+    X = scale_log(X, cols=[x for x in X.columns if x not in dumm], plus1_cols=[
+                  'Total_ends', 'Floor_number'])
     # # scale Floor numbers:
     # if 'Floor_number' in X.columns:
     #     X['Floor_number'] = np.log(X['Floor_number']+1)
