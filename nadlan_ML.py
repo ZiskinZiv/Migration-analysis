@@ -56,12 +56,12 @@ plot_names = {'Floor_number': 'Floor',
               'distance_to_nearest_school': 'Nearest school',
               'Total_ends': 'Building rate',
               'mean_distance_to_28_mokdim': 'Distance to ECs',
-              # 'SEI': 'Social-Economic Index',
+              'SEI': 'Social-Economic Index',
               'SEI_value_2015': 'Social-Economic Index',
               'SEI_value_2017': 'Social-Economic Index',
               'Rooms': 'Rooms', 'Rooms_3': '3 Rooms', 'Rooms_5': '5 Rooms',
               'Netflow': 'Net migration',
-              'MISH': 'AHP'
+              'MISH': 'AHP',
               }
 # AHP : Afforable Housing Program
 
@@ -72,19 +72,261 @@ def select_years_interaction_term(ds, regressor='SEI'):
     return ds
 
 
-def prepare_new_X_y(df, y_name='Price_inflation_fixed'):
+def ABS_SHAP(df_shap, df):
+    import numpy as np
     import pandas as pd
-    X, y, scaler = produce_X_y(
-        df, y_name=y_name, year=None, feats=best_years, dummy='Rooms_345', plot_Xcorr=True, scale_X=False)
-    Xs = []
-    for numer in best_regular:
-        X1 = get_design_with_pair_interaction(
-            X, year_dummies+room_dummies+['New']+[numer])
-        Xs.append(X1)
+    import seaborn as sns
+    sns.set_theme(style='ticks', font_scale=1.2)
+    #import matplotlib as plt
+    # Make a copy of the input data
+    shap_v = pd.DataFrame(df_shap)
+    feature_list = df.columns
+    shap_v.columns = feature_list
+    df_v = df.copy().reset_index().drop('time', axis=1)
 
-    X1 = pd.concat(Xs, axis=1)
-    X1 = X1.loc[:, ~X1.columns.duplicated()]
-    return X1, y
+    # Determine the correlation in order to plot with different colors
+    corr_list = list()
+    for i in feature_list:
+        b = np.corrcoef(shap_v[i], df_v[i])[1][0]
+        corr_list.append(b)
+    corr_df = pd.concat(
+        [pd.Series(feature_list), pd.Series(corr_list)], axis=1).fillna(0)
+    # Make a data frame. Column 1 is the feature, and Column 2 is the correlation coefficient
+    corr_df.columns = ['Predictor', 'Corr']
+    corr_df['Sign'] = np.where(corr_df['Corr'] > 0, 'red', 'blue')
+
+    # Plot it
+    shap_abs = np.abs(shap_v)
+    k = pd.DataFrame(shap_abs.mean()).reset_index()
+    k.columns = ['Predictor', 'SHAP_abs']
+    k2 = k.merge(corr_df, left_on='Predictor', right_on='Predictor', how='inner')
+    k2 = k2.sort_values(by='SHAP_abs', ascending=True)
+    colorlist = k2['Sign']
+    ax = k2.plot.barh(x='Predictor', y='SHAP_abs',
+                      color=colorlist, figsize=(5, 6), legend=False)
+    ax.set_xlabel("SHAP Value (Red = Positive Impact)")
+    return
+
+
+def plot_simplified_shap_tree_explainer(rf_model):
+    import shap
+    rf_model.fit(X, y)
+    dfX = X.to_dataset('regressor').to_dataframe()
+    dfX = dfX.rename(
+        {'qbo_cdas': 'QBO', 'anom_nino3p4': 'ENSO', 'co2': r'CO$_2$'}, axis=1)
+    ex_rf = shap.Explainer(rf_model)
+    shap_values_rf = ex_rf.shap_values(dfX)
+    ABS_SHAP(shap_values_rf, dfX)
+    return
+
+
+def plot_Tree_explainer_shap(rf_model, X_train, y_train, X_test):
+    import shap
+    print('fitting...')
+    rf_model.fit(X_train, y_train)
+    # explain all the predictions in the test set
+    print('explaining...')
+    explainer = shap.TreeExplainer(rf_model)
+    shap_values = explainer.shap_values(X_test)
+    shap.summary_plot(shap_values, X_test)
+    # shap.summary_plot(shap_values_rf, dfX, plot_size=1.1)
+    return
+# def get_mean_std_from_df_feats(df, feats=best, ignore=['New', 'Rooms_345', 'Sale_year'],
+#                                log=['Total_ends']):
+#     import numpy as np
+#     f = [x for x in best if x not in ignore]
+#     df1 = df.copy()
+#     if log is not None:
+#         df1[log] = (df1[log]+1).apply(np.log)
+#     mean = df1[f].mean()
+#     std = df1[f].std()
+#     return mean, std
+
+
+def produce_rooms_new_years_from_ds_var(ds, dsvar='beta_coef', new_cat='Status',new='New', old='Old'):
+    import numpy as np
+    import pandas as pd
+    df = ds[dsvar].to_dataset('year').to_dataframe().T
+    dfs = []
+    # 3 rooms old:
+    dff = df['const'].apply(np.exp).to_frame('Price')
+    dff['Rooms'] = 3
+    dff[new_cat] = old
+    dfs.append(dff)
+    # 3 rooms new:
+    dff = (df['const']+df['New']).apply(np.exp).to_frame('Price')
+    dff['Rooms'] = 3
+    dff[new_cat] = new
+    dfs.append(dff)
+    # 4 rooms old:
+    dff = (df['const']+df['Rooms_4']).apply(np.exp).to_frame('Price')
+    dff['Rooms'] = 4
+    dff[new_cat] = old
+    dfs.append(dff)
+    # 4 rooms new:
+    dff = (df['const']+df['New']+df['Rooms_4']+df['Rooms_4_New']).apply(np.exp).to_frame('Price')
+    dff['Rooms'] = 4
+    dff[new_cat] = new
+    dfs.append(dff)
+    # 5 rooms old:
+    dff = (df['const']+df['Rooms_5']).apply(np.exp).to_frame('Price')
+    dff['Rooms'] = 5
+    dff[new_cat] = old
+    dfs.append(dff)
+    # 5 rooms new:
+    dff = (df['const']+df['New']+df['Rooms_5']+df['Rooms_5_New']).apply(np.exp).to_frame('Price')
+    dff['Rooms'] = 5
+    dff[new_cat] = new
+    dfs.append(dff)
+    dff = pd.concat(dfs, axis=0)
+    dff['year'] = dff.index
+    return dff
+
+
+def plot_price_rooms_new_from_new_ds(ds):
+    import seaborn as sns
+    import matplotlib.pyplot as plt
+    import pandas as pd
+    sns.set_theme(style='ticks', font_scale=1.8)
+    fig, ax = plt.subplots(figsize=(17, 10))
+    beta = produce_rooms_new_years_from_ds_var(ds, 'beta_coef')
+    upper = produce_rooms_new_years_from_ds_var(ds, 'CI_95_upper')
+    lower = produce_rooms_new_years_from_ds_var(ds, 'CI_95_lower')
+    df = pd.concat([lower, beta, upper], axis=0)
+    df['Price'] /= 1e6
+    df['year'] = pd.to_datetime(df['year'], format='%Y')
+    sns.lineplot(data=df, x='year', y='Price', hue='Rooms', style='Status',
+                 ax=ax, palette='tab10', ci='sd', markers=True)
+    ax.set_ylabel('Apartment Price [millions NIS]')
+    ax.set_xlabel('')
+    ax.grid(True)
+    sns.despine(fig)
+    fig.tight_layout()
+    return fig
+
+
+def plot_regular_feats_comparison_from_new_ds(ds,reg_name='Predictor'):
+    import seaborn as sns
+    import matplotlib.pyplot as plt
+    import pandas as pd
+    sns.set_theme(style='ticks', font_scale=1.8)
+    fig, ax = plt.subplots(figsize=(17, 10))
+    dfs = []
+    df = ds['beta_coef'].to_dataset('year').to_dataframe().T
+    dff = df[best_regular].melt(ignore_index=False)
+    dff['year'] = dff.index
+    dfs.append(dff)
+    df = ds['CI_95_upper'].to_dataset('year').to_dataframe().T
+    dff = df[best_regular].melt(ignore_index=False)
+    dff['year'] = dff.index
+    dfs.append(dff)
+    df = ds['CI_95_lower'].to_dataset('year').to_dataframe().T
+    dff = df[best_regular].melt(ignore_index=False)
+    dff['year'] = dff.index
+    dfs.append(dff)
+    dff = pd.concat(dfs, axis=0)
+    dff['regressor'] = dff['regressor'].map(plot_names)
+    dff = dff.rename({'regressor': reg_name}, axis=1)
+    dff['year'] = pd.to_datetime(dff['year'], format='%Y')
+    sns.lineplot(data=dff, x='year', y='value', hue=reg_name,
+                 ax=ax, ci='sd', markers=True,
+                 palette='Dark2')
+    ax.set_ylabel(r'Standardized $\beta$s')
+    ax.set_xlabel('')
+    ax.grid(True)
+    sns.despine(fig)
+    fig.tight_layout()
+    return dff
+
+
+def prepare_new_X_y_with_year(df, year=2000, y_name='Price'):
+    import pandas as pd
+
+    def return_X_with_interaction(X, dummy_list, var_list):
+        Xs = []
+        for num_var in var_list:
+            X1 = get_design_with_pair_interaction(
+                X, dummy_list+[num_var])
+            Xs.append(X1)
+        X1 = pd.concat(Xs, axis=1)
+        X1 = X1.loc[:, ~X1.columns.duplicated()]
+        return X1
+
+    # m, s = get_mean_std_from_df_feats(df)
+    X, y, scaler = produce_X_y(
+        df, y_name=y_name, year=year, feats=best, dummy='Rooms_345',
+        plot_Xcorr=True, scale_X=True)
+    # X[best_regular] -= m
+    # X[best_regular] /= s
+    # regular vars vs. time (years):
+    # X1 = return_X_with_interaction(X, ['trend'], best_regular)
+    # rooms dummies and new:
+    X2 = return_X_with_interaction(X, room_dummies, ['New'])
+    # rooms dummies and years:
+    # X3 = return_X_with_interaction(X, ['trend'], room_dummies)
+    # New and years:
+    # X4 = return_X_with_interaction(X, year_dummies, ['New'])
+    X = pd.concat([X, X2],axis=1) #, X3, X4], axis=1)
+    X = X.loc[:, ~X.columns.duplicated()]
+    return X, y
+
+
+def prepare_new_X_y(df, y_name='Price'):
+    import pandas as pd
+
+    def return_X_with_interaction(X, dummy_list, var_list):
+        Xs = []
+        for num_var in var_list:
+            X1 = get_design_with_pair_interaction(
+                X, dummy_list+[num_var])
+            Xs.append(X1)
+        X1 = pd.concat(Xs, axis=1)
+        X1 = X1.loc[:, ~X1.columns.duplicated()]
+        return X1
+
+    X, y, scaler = produce_X_y(
+        df, y_name=y_name, year=None, feats=best_years, dummy='Rooms_345',
+        plot_Xcorr=True, scale_X=True)
+    # regular vars vs. time (years):
+    X1 = return_X_with_interaction(X, year_dummies, best_regular)
+    # rooms dummies and new:
+    X2 = return_X_with_interaction(X, room_dummies, ['New'])
+    # rooms dummies and years:
+    # X3 = return_X_with_interaction(X, year_dummies, room_dummies)
+    # New and years:
+    # X4 = return_X_with_interaction(X, year_dummies, ['New'])
+    X = pd.concat([X1, X2],axis=1) #, X3, X4], axis=1)
+    X = X.loc[:, ~X.columns.duplicated()]
+    return X, y
+
+
+def prepare_new_X_y_with_trend(df, y_name='Price'):
+    import pandas as pd
+
+    def return_X_with_interaction(X, dummy_list, var_list):
+        Xs = []
+        for num_var in var_list:
+            X1 = get_design_with_pair_interaction(
+                X, dummy_list+[num_var])
+            Xs.append(X1)
+        X1 = pd.concat(Xs, axis=1)
+        X1 = X1.loc[:, ~X1.columns.duplicated()]
+        return X1
+
+    X, y, scaler = produce_X_y(
+        df, y_name=y_name, year='trend', feats=best, dummy='Rooms_345',
+        plot_Xcorr=True, scale_X=True)
+    # regular vars vs. time (years):
+    X1 = return_X_with_interaction(X, ['trend'], best_regular)
+    # rooms dummies and new:
+    X2 = return_X_with_interaction(X, room_dummies, ['New'])
+    # rooms dummies and years:
+    X3 = return_X_with_interaction(X, ['trend'], room_dummies)
+    # New and years:
+    # X4 = return_X_with_interaction(X, year_dummies, ['New'])
+    X = pd.concat([X1, X2, X3],axis=1) #, X3, X4], axis=1)
+    X = X.loc[:, ~X.columns.duplicated()]
+    return X, y
 
 
 def get_design_with_pair_interaction(data, group_pair):
@@ -412,6 +654,12 @@ def load_nadlan_with_features(path=work_david, years=[2000, 2019], asset_type=ap
         # pi = read_price_index()['price_index_without_housing']
         # pi = 100 / pi
         # df = df.groupby('Sale_year').apply(add_inflation_func, pi)
+        #create linear trend from dt:
+        df = df.set_index(pd.to_datetime(df['Date'])).sort_index()
+        df['trend'] = df.index.to_julian_date()
+        df['trend'] -= df['trend'].iloc[0]
+        df['trend'] /= df['trend'].iloc[-1]
+        df = df.reset_index(drop=True)
     return df
 
 
@@ -501,8 +749,9 @@ def run_MLR_on_all_years(df, feats=features, dummy='Rooms_345', scale_X=False):
     years = np.arange(2000, 2020, 1)
     das = []
     for year in years:
-        X, y, scaler = produce_X_y(df, year=year, y_name='Price', plot_Xcorr=False,
-                                   feats=feats, dummy=dummy, scale_X=scale_X)
+        X, y = prepare_new_X_y_with_year(df, year=year, y_name='Price')
+        # X, y, scaler = produce_X_y(df, year=year, y_name='Price', plot_Xcorr=False,
+                                   # feats=feats, dummy=dummy, scale_X=scale_X)
         vif = calc_vif(X).set_index('variables')
         vif.index.name = 'regressor'
         vif = vif.to_xarray()['VIF']
@@ -850,8 +1099,8 @@ def run_CV_on_all_years(df, model_name='RF', savepath=ml_path, pgrid='normal',
 def produce_X_y_RF(df, y_name='Price', feats=best_rf):
     # from sklearn.preprocessing import StandardScaler
     # from sklearn.preprocessing import MinMaxScaler
-    import numpy as np
-    import pandas as pd
+    # import numpy as np
+    # import pandas as pd
     df = df[df['Sale_year'].isin([2015, 2016, 2017, 2018])]
     if feats is not None:
         print('picking {} as features.'.format(feats))
@@ -862,6 +1111,10 @@ def produce_X_y_RF(df, y_name='Price', feats=best_rf):
         X['New'] = X['New'].astype(int)
     if 'MISH' in X.columns:
         X['MISH'] = X['MISH'].astype(int)
+    if 'Total_ends' in X.columns:
+        X['Total_ends'] /= 1000
+    if 'Netflow' in X.columns:
+        X['Netflow'] /= 10000
     y = y.reset_index(drop=True)
     # if dummy is not None:
     #     prefix = dummy.split('_')[0]
@@ -876,8 +1129,8 @@ def produce_X_y_RF(df, y_name='Price', feats=best_rf):
     # Xscaler = StandardScaler()
     #yscaler = MinMaxScaler()
     # yscaler = PowerTransformer(method='yeo-johnson',standardize=True)
-    y_train = y[y['Sale_year'].isin([2015, 2016])]
-    y_test = y[y['Sale_year'].isin([2016, 2017])]
+    y_train = y[y['Sale_year'].isin([2015, 2016])] / 1e6
+    y_test = y[y['Sale_year'].isin([2016, 2017])] / 1e6
     # y_train = y_train.apply(np.log)
     # y_test = y_test.apply(np.log)
     # # y_scaled = yscaler.fit_transform(y_scaled.values.reshape(-1,1))
@@ -886,9 +1139,9 @@ def produce_X_y_RF(df, y_name='Price', feats=best_rf):
     # scale X:
     # cols_to_scale = [x for x in X.columns if x != 'Sale_year']
     # X, scaler = scale_df(X, cols=cols_to_scale, scaler=Xscaler)
-    X_train = X[X['Sale_year'].isin([2015, 2016])].drop('Sale_year', axis=1)
+    X_train = X[X['Sale_year'].isin([2015, 2016])].drop('Sale_year', axis=1).astype(float)
     X_train.drop('SEI_value_2017', axis=1, inplace=True)
-    X_test = X[X['Sale_year'].isin([2016, 2017])].drop('Sale_year', axis=1)
+    X_test = X[X['Sale_year'].isin([2016, 2017])].drop('Sale_year', axis=1).astype(float)
     X_test.drop('SEI_value_2015', axis=1, inplace=True)
     X_train = X_train.rename({'SEI_value_2015': 'SEI'}, axis=1)
     X_test = X_test.rename({'SEI_value_2017': 'SEI'}, axis=1)
@@ -910,7 +1163,10 @@ def produce_X_y(df, year=2015, y_name='Price', plot_Xcorr=True,
     # first, subset for year:
     # df = df[df['Type_of_asset'].isin(apts_more)]
     if year is not None:
-        df = df[df['Sale_year'] == year]
+        if year != 'trend':
+            df = df[df['Sale_year'] == year]
+        else:
+            feats.append('trend')
     else:
         years = pd.get_dummies(data=df['Sale_year'], prefix='year')
         # drop one col from one-hot encoding not to fall into dummy trap!:
@@ -937,7 +1193,10 @@ def produce_X_y(df, year=2015, y_name='Price', plot_Xcorr=True,
     # df['Floor_number'] = df['Floor_number'].astype(int)
     # df['New_apartment'] = df['New_apartment'].astype(int)
     if plot_Xcorr:
-        sns.heatmap(X.corr('pearson'), annot=True)
+        if year is None:
+            sns.heatmap(X.drop(year_dummies, axis=1).corr('pearson'), annot=True)
+        else:
+            sns.heatmap(X.corr('pearson'), annot=True)
     if 'Rooms_345' in X.columns:
         X['Rooms_345'] = X['Rooms_345'].astype(int)
     # do onhotencoding on rooms:
@@ -955,7 +1214,10 @@ def produce_X_y(df, year=2015, y_name='Price', plot_Xcorr=True,
     # scale to log all non-dummy variables:
     # dummies = ['New', 'Rooms_3', 'Rooms_5']
     if year is None:
-        dumm = dummies + ['year_{}'.format(x) for x in np.arange(2001, 2020)]
+        if year != 'trend':
+            dumm = dummies + ['year_{}'.format(x) for x in np.arange(2001, 2020)]
+        else:
+            dumm = dummies
     else:
         dumm = dummies
     X = scale_log(X, cols=['Total_ends'], plus1_cols=[
@@ -989,8 +1251,8 @@ def produce_X_y(df, year=2015, y_name='Price', plot_Xcorr=True,
     y = pd.DataFrame(y_scaled, columns=[y_name])
     if scale_X:
         X, scaler = scale_df(X, scaler=Xscaler, cols=[
-                             x for x in X.columns if 'New' not in x])
-        y, scaler = scale_df(y, scaler=Xscaler)
+                             x for x in X.columns if x in best_regular])
+        # y, scaler = scale_df(y, scaler=Xscaler)
     else:
         scaler = Xscaler
     y = y[y_name]
