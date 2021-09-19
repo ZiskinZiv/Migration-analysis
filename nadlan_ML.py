@@ -120,15 +120,28 @@ def plot_simplified_shap_tree_explainer(rf_model):
     return
 
 
-def plot_Tree_explainer_shap(rf_model, X_train, y_train, X_test):
+def convert_shap_values_to_xarray(shap_values, X_test):
+    SV = X_test.copy(data=shap_values)
+    return SV
+
+
+def plot_Tree_explainer_shap(rf_model, X_train, y_train, X_test, samples=1000):
     import shap
+    from shap.utils import sample
     print('fitting...')
     rf_model.fit(X_train, y_train)
     # explain all the predictions in the test set
     print('explaining...')
     explainer = shap.TreeExplainer(rf_model)
-    shap_values = explainer.shap_values(X_test)
-    shap.summary_plot(shap_values, X_test)
+    # rename features:
+    X_test = X_test.rename(plot_names, axis=1)
+    if samples is not None:
+        print('using just {} samples out of {}.'.format(samples, len(X_test)))
+        shap_values = explainer.shap_values(sample(X_test, samples).values)
+        shap.summary_plot(shap_values, sample(X_test, samples))
+    else:
+        shap_values = explainer.shap_values(X_test.values)
+        shap.summary_plot(shap_values, X_test)
     # shap.summary_plot(shap_values_rf, dfX, plot_size=1.1)
     return
 # def get_mean_std_from_df_feats(df, feats=best, ignore=['New', 'Rooms_345', 'Sale_year'],
@@ -1096,12 +1109,15 @@ def run_CV_on_all_years(df, model_name='RF', savepath=ml_path, pgrid='normal',
     return
 
 
-def produce_X_y_RF(df, y_name='Price', feats=best_rf):
-    # from sklearn.preprocessing import StandardScaler
+def produce_X_y_RF(df, y_name='Price', feats=best_rf, train_years=[2015, 2016],
+                   test_years=[2017, 2018]):
+    from sklearn.preprocessing import StandardScaler
     # from sklearn.preprocessing import MinMaxScaler
     # import numpy as np
-    # import pandas as pd
-    df = df[df['Sale_year'].isin([2015, 2016, 2017, 2018])]
+    import pandas as pd
+    print('picking {} as train years.'.format(','.join([str(x) for x in train_years])))
+    print('picking {} as test years.'.format(','.join([str(x) for x in test_years])))
+    df = df[df['Sale_year'].isin(train_years+test_years)]
     if feats is not None:
         print('picking {} as features.'.format(feats))
         X = df[feats].dropna()
@@ -1126,12 +1142,15 @@ def produce_X_y_RF(df, y_name='Price', feats=best_rf):
     # X = scale_log(X, cols=[x for x in X.columns if x not in dummies], plus1_cols=[
     #               'Total_ends', 'Floor_number'])
 
-    # Xscaler = StandardScaler()
+    yscaler = StandardScaler()
     #yscaler = MinMaxScaler()
     # yscaler = PowerTransformer(method='yeo-johnson',standardize=True)
-    y_train = y[y['Sale_year'].isin([2015, 2016])] / 1e6
-    y_test = y[y['Sale_year'].isin([2016, 2017])] / 1e6
-    # y_train = y_train.apply(np.log)
+    y_train = y[y['Sale_year'].isin(train_years)] / 1e6
+    y_test = y[y['Sale_year'].isin(test_years)] / 1e6
+    y_train = yscaler.fit_transform(y_train[y_name].values.reshape(-1,1))
+    y_test = yscaler.fit_transform(y_test[y_name].values.reshape(-1,1))
+    y_train = pd.DataFrame(y_train, columns=[y_name])
+    y_test = pd.DataFrame(y_test, columns=[y_name])
     # y_test = y_test.apply(np.log)
     # # y_scaled = yscaler.fit_transform(y_scaled.values.reshape(-1,1))
     # y_train = pd.DataFrame(y_train, columns=[y_name])
@@ -1139,9 +1158,9 @@ def produce_X_y_RF(df, y_name='Price', feats=best_rf):
     # scale X:
     # cols_to_scale = [x for x in X.columns if x != 'Sale_year']
     # X, scaler = scale_df(X, cols=cols_to_scale, scaler=Xscaler)
-    X_train = X[X['Sale_year'].isin([2015, 2016])].drop('Sale_year', axis=1).astype(float)
+    X_train = X[X['Sale_year'].isin(train_years)].drop('Sale_year', axis=1).astype(float)
     X_train.drop('SEI_value_2017', axis=1, inplace=True)
-    X_test = X[X['Sale_year'].isin([2016, 2017])].drop('Sale_year', axis=1).astype(float)
+    X_test = X[X['Sale_year'].isin(test_years)].drop('Sale_year', axis=1).astype(float)
     X_test.drop('SEI_value_2015', axis=1, inplace=True)
     X_train = X_train.rename({'SEI_value_2015': 'SEI'}, axis=1)
     X_test = X_test.rename({'SEI_value_2017': 'SEI'}, axis=1)
