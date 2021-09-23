@@ -82,7 +82,7 @@ def ABS_SHAP(df_shap, df):
     shap_v = pd.DataFrame(df_shap)
     feature_list = df.columns
     shap_v.columns = feature_list
-    df_v = df.copy().reset_index().drop('time', axis=1)
+    df_v = df.copy().reset_index()#.drop('time', axis=1)
 
     # Determine the correlation in order to plot with different colors
     corr_list = list()
@@ -121,7 +121,9 @@ def plot_simplified_shap_tree_explainer(rf_model):
 
 
 def convert_shap_values_to_xarray(shap_values, X_test):
-    SV = X_test.copy(data=shap_values)
+    import pandas as pd
+    SV = pd.DataFrame(shap_values)
+    SV.columns = X_test.columns
     return SV
 
 
@@ -139,11 +141,13 @@ def plot_Tree_explainer_shap(rf_model, X_train, y_train, X_test, samples=1000):
         print('using just {} samples out of {}.'.format(samples, len(X_test)))
         shap_values = explainer.shap_values(sample(X_test, samples).values)
         shap.summary_plot(shap_values, sample(X_test, samples))
+        SV = convert_shap_values_to_xarray(shap_values, sample(X_test, samples))
     else:
         shap_values = explainer.shap_values(X_test.values)
         shap.summary_plot(shap_values, X_test)
+        SV = convert_shap_values_to_xarray(shap_values, X_test)
     # shap.summary_plot(shap_values_rf, dfX, plot_size=1.1)
-    return
+    return SV
 # def get_mean_std_from_df_feats(df, feats=best, ignore=['New', 'Rooms_345', 'Sale_year'],
 #                                log=['Total_ends']):
 #     import numpy as np
@@ -1737,6 +1741,17 @@ class ML_Classifier_Switcher(object):
                                'solver': ['adam', 'lbfgs', 'sgd']}
             #(1,),(2,),(3,),(4,),(5,),(6,),(7,),(8,),(9,),(10,),(11,), (12,),(13,),(14,),(15,),(16,),(17,),(18,),(19,),(20,),(21,)
         return MLPRegressor(random_state=42, max_iter=500, learning_rate_init=0.1)
+
+    def XGR(self):
+        import numpy as np
+        from xgboost import XGBRegressor
+        if self.pgrid == 'light':
+            self.param_grid = {'gamma': np.logspace(-5, 1, 7),
+                               'subsample': [0.5, 0.75, 1.0],
+                               'colsample_bytree': [0.5, 0.75, 1.0],
+                               'learning_rate': ['constant', 'adaptive'],
+                               'max_depth': [3, 5, 10]}
+        return XGBRegressor(random_state=42, n_jobs=-1)
 
     def RF(self):
         from sklearn.ensemble import RandomForestRegressor
