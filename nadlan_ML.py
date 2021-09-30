@@ -63,7 +63,95 @@ plot_names = {'Floor_number': 'Floor',
               'Netflow': 'Net migration',
               'MISH': 'AHP',
               }
+
+short_plot_names = {'Total_ends': 'BR',
+                    'mean_distance_to_28_mokdim': 'Distance'}
+
+add_units_dict = {'Distance': 'Distance [km]', 'BR': r'BR [Apts$\cdot$yr$^{-1}$]',
+                  'Netflow': r'Netflow [people$\cdot$yr$^{-1}$]'}
 # AHP : Afforable Housing Program
+
+
+def load_shap_values(path=work_david/'ML', samples=10000,
+                     interaction_too=True, rename=True):
+    import pandas as pd
+    import xarray as xr
+    print('loading {} samples.'.format(samples))
+    X_test = pd.read_csv(path/'X_test_RF_{}.csv'.format(samples))
+    shap_values = pd.read_csv(path/'SHAP_values_RF_{}.csv'.format(samples))
+    if rename:
+        X_test = X_test.rename(short_plot_names, axis=1)
+        shap_values = shap_values.rename(short_plot_names, axis=1)
+    if interaction_too:
+        print('loading interaction values too.')
+        shap_interaction_values = xr.load_dataarray(path/'SHAP_interaction_values_RF_{}.nc'.format(samples))
+        shap_interaction_values['feature1'] = X_test.columns
+        shap_interaction_values['feature2'] = X_test.columns
+        return X_test, shap_values, shap_interaction_values
+    else:
+        return X_test, shap_values
+
+
+def plot_dependence(shap_values, X_test, x_feature='Rooms',
+                    y_features=['SEI', 'Distance', 'New'],
+                    alpha=0.7, cmap=None,
+                    plot_size=1.5, fontsize=16):
+    import shap
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+    sns.set_theme(style='ticks', font_scale=1.2)
+    fig, axes = plt.subplots(len(y_features), 1, sharex=True, figsize=(8, 10))
+    X = X_test.copy()
+    X = X.rename(add_units_dict, axis=1)
+    X['New'] = X['New'].astype(int)
+    new_dict = {0: 'Old', 1: 'New'}
+    X['New'] = X['New'].map(new_dict)
+    for i, y in enumerate(y_features):
+        y_new = add_units_dict.get(y, y)
+        shap.dependence_plot(x_feature, shap_values.values, X, x_jitter=1,
+                             dot_size=4, alpha=0.3, interaction_index=y_new,
+                             ax=axes[i])
+        # axes[i].set_ylabel(axes[i].get_ylabel(), fontsize=fontsize)
+        # axes[i].set_xlabel(axes[i].get_xlabel(), fontsize=fontsize)
+        # axes[i].tick_params(labelsize=fontsize)
+        axes[i].grid(True)
+    [ax.set_xlabel(ax.get_xlabel(), fontsize=fontsize) for ax in fig.axes]
+    [ax.set_ylabel(ax.get_ylabel(), fontsize=fontsize) for ax in fig.axes]
+    [ax.tick_params(labelsize=fontsize) for ax in fig.axes]
+    fig.tight_layout()
+    return fig
+
+
+def plot_summary_shap_values(shap_values, X_test, alpha=0.7, cmap=None,
+                             plot_size=1.5, fontsize=16):
+    import shap
+    import seaborn as sns
+    import matplotlib.pyplot as plt
+    # sns.set_theme(style='ticks', font_scale=1.2)
+    if cmap is None:
+        shap.summary_plot(shap_values.values, X_test, alpha=alpha, plot_size=plot_size)
+    else:
+        if not isinstance(cmap, str):
+            cm = cmap.get_mpl_colormap()
+        else:
+            cm = sns.color_palette(cmap, as_cmap=True)
+        shap.summary_plot(shap_values.values, X_test, alpha=alpha, cmap=cm, plot_size=plot_size)
+    if len(shap_values.shape) > 2:
+        fig = plt.gcf()
+        [ax.set_xlabel(ax.get_xlabel(), fontsize=fontsize) for ax in fig.axes]
+        [ax.set_ylabel(ax.get_ylabel(), fontsize=fontsize) for ax in fig.axes]
+        [ax.set_title(ax.get_title(), fontsize=fontsize) for ax in fig.axes]
+        [ax.tick_params(labelsize=fontsize) for ax in fig.axes]
+    else:
+        fig, ax = plt.gcf(), plt.gca()
+        ax.set_xlabel(ax.get_xlabel(), fontsize=fontsize)
+        ax.set_ylabel(ax.get_ylabel(), fontsize=fontsize)
+        ax.tick_params(labelsize=fontsize)
+        cb = fig.axes[-1]
+        cb.set_ylabel(cb.get_ylabel(), fontsize=fontsize)
+        cb.tick_params(labelsize=fontsize)
+    fig.tight_layout()
+    return fig
 
 
 def select_years_interaction_term(ds, regressor='SEI'):
@@ -1125,16 +1213,18 @@ def produce_X_y_RF(df, y_name='Price', feats=best_rf, train_years=[2015, 2016],
     if feats is not None:
         print('picking {} as features.'.format(feats))
         X = df[feats].dropna()
+    if 'Rooms' in X.columns:
+        X = X[(X['Rooms']>=1) & (X['Rooms']<=6)]
     y = df.loc[X.index, [y_name, 'Sale_year']]
     X = X.reset_index(drop=True)
     if 'New' in X.columns:
         X['New'] = X['New'].astype(int)
     if 'MISH' in X.columns:
         X['MISH'] = X['MISH'].astype(int)
-    if 'Total_ends' in X.columns:
-        X['Total_ends'] /= 1000
-    if 'Netflow' in X.columns:
-        X['Netflow'] /= 10000
+    # if 'Total_ends' in X.columns:
+    #     X['Total_ends'] /= 1000
+    # if 'Netflow' in X.columns:
+    #     X['Netflow'] /= 10000
     y = y.reset_index(drop=True)
     # if dummy is not None:
     #     prefix = dummy.split('_')[0]
@@ -1149,12 +1239,12 @@ def produce_X_y_RF(df, y_name='Price', feats=best_rf, train_years=[2015, 2016],
     yscaler = StandardScaler()
     #yscaler = MinMaxScaler()
     # yscaler = PowerTransformer(method='yeo-johnson',standardize=True)
-    y_train = y[y['Sale_year'].isin(train_years)] / 1e6
-    y_test = y[y['Sale_year'].isin(test_years)] / 1e6
-    y_train = yscaler.fit_transform(y_train[y_name].values.reshape(-1,1))
-    y_test = yscaler.fit_transform(y_test[y_name].values.reshape(-1,1))
-    y_train = pd.DataFrame(y_train, columns=[y_name])
-    y_test = pd.DataFrame(y_test, columns=[y_name])
+    y_train = y[y['Sale_year'].isin(train_years)].apply(np.log)
+    y_test = y[y['Sale_year'].isin(test_years)].apply(np.log)
+    # y_train = yscaler.fit_transform(y_train[y_name].values.reshape(-1,1))
+    # y_test = yscaler.fit_transform(y_test[y_name].values.reshape(-1,1))
+    # y_train = pd.DataFrame(y_train, columns=[y_name])
+    # y_test = pd.DataFrame(y_test, columns=[y_name])
     # y_test = y_test.apply(np.log)
     # # y_scaled = yscaler.fit_transform(y_scaled.values.reshape(-1,1))
     # y_train = pd.DataFrame(y_train, columns=[y_name])
