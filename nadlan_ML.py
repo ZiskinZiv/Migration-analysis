@@ -72,6 +72,87 @@ add_units_dict = {'Distance': 'Distance [km]', 'BR': r'BR [Apts$\cdot$yr$^{-1}$]
 # AHP : Afforable Housing Program
 
 
+def plot_RF_time_series(X_ts):
+    import seaborn as sns
+    import matplotlib.pyplot as plt
+    import pandas as pd
+    sns.set_theme(style='ticks', font_scale=1.8)
+    fig, ax = plt.subplots(figsize=(17, 10))
+    X_ts = X_ts[X_ts['Rooms'].isin([3, 4, 5])]
+    X_ts = X_ts.rename({'New': 'Status'}, axis=1)
+    X_ts['Price'] /= 1e6
+    X_ts['Year'] = pd.to_datetime(X_ts['Year'], format='%Y')
+    sns.lineplot(data=X_ts, x='Year', y='Price', hue='Rooms', style='Status',
+                 ax=ax, palette='tab10', markers=True)
+    ax.set_ylabel('Apartment Price [millions NIS]')
+    ax.set_xlabel('')
+    ax.grid(True)
+    sns.despine(fig)
+    fig.tight_layout()
+    return fig
+
+
+def loop_over_RF_models_years(df, path=work_david/'ML', mode='score'):
+    import numpy as np
+    import pandas as pd
+    import shap
+    import xarray as xr
+    years = np.arange(2000, 2020, 1)
+    train_scores = []
+    test_scores = []
+    x_tests = []
+    shaps = []
+    for year in years:
+        print(year)
+        _, gr = load_HP_params_from_optimized_model(path, pgrid='normal',
+                                                    year=year)
+        rf = gr.best_estimator_
+        X_train, X_test, y_train, y_test = produce_X_y_RF_per_year(df,
+                                                                   year=year,
+                                                                   verbose=0)
+        if mode == 'score':
+            train_scores.append(rf.score(X_train, y_train))
+            test_scores.append(rf.score(X_test, y_test))
+        elif mode == 'time-series':
+            rf.fit(X_train, y_train)
+            y_pred = rf.predict(X_test)
+            y_pred = np.exp(y_pred)
+            X_test['Price'] = y_pred
+            X_test['Year'] = year
+            X_test = X_test.reset_index(drop=True)
+            x_tests.append(X_test)
+        elif mode == 'shap':
+            rf.fit(X_train, y_train)
+            explainer = shap.TreeExplainer(rf)
+            shap_values = explainer.shap_values(X_test.values)
+            SV = convert_shap_values_to_pandas(shap_values, X_test)
+            SV = SV.to_xarray().to_array('feature')
+            shaps.append(SV)
+        elif mode == 'X_test':
+            X_test.index.name = 'sample'
+            x_tests.append(X_test.to_xarray().to_array('feature'))
+    if mode == 'score':
+        sc = pd.DataFrame(train_scores)
+        sc.columns = ['train_r2']
+        sc['test_r2'] = test_scores
+        sc.index = years
+        return sc
+    elif mode == 'time-series':
+        X_ts = pd.concat(x_tests, axis=0)
+        return X_ts
+    elif mode == 'shap':
+        sv_da = xr.concat(shaps, 'year')
+        sv_da['year'] = years
+        sv_da.attrs['long_name'] = 'Shapley values via SHAP Python package.'
+        sv_da.to_netcdf(path/'Nadlan_SHAP_RF_{}-{}.nc'.format(years[0], years[-1]))
+        return sv_da
+    elif mode == 'X_test':
+        X_ts = xr.concat(x_tests, 'year')
+        X_ts['year'] = years
+        X_ts.attrs['long_name'] = 'X_tests per year to use with the SHAP'
+        X_ts.to_netcdf(path/'Nadlan_X_test_RF_{}-{}.nc'.format(years[0], years[-1]))
+        return X_ts
+
 def load_shap_values(path=work_david/'ML', samples=10000,
                      interaction_too=True, rename=True):
     import pandas as pd
@@ -160,6 +241,72 @@ def select_years_interaction_term(ds, regressor='SEI'):
     return ds
 
 
+def produce_RF_abs_SHAP_all_years(path=ml_path, plot=True):
+    import xarray as xr
+    import numpy as np
+    import pandas as pd
+    import seaborn as sns
+    import matplotlib.pyplot as plt
+    shap_da = xr.load_dataarray(path / 'Nadlan_SHAP_RF_2000-2019.nc')
+    X_test_da = xr.load_dataarray(path / 'Nadlan_X_test_RF_2000-2019.nc')
+    k2s = []
+    for year in np.arange(2000, 2020, 1):
+        shap_df = shap_da.sel(year=year).to_dataset('feature').to_dataframe().dropna()
+        shap_df.drop('year', axis=1, inplace=True)
+        X_test = X_test_da.sel(year=year).to_dataset('feature').to_dataframe().dropna()
+        X_test.drop('year', axis=1, inplace=True)
+        k2 = produce_abs_SHAP_from_df(shap_df, X_test, plot=False)
+        k2['year'] = year
+        k2s.append(k2)
+    abs_shap = pd.concat(k2s, axis=0)
+    if plot:
+        sns.set_theme(style='ticks', font_scale=1.8)
+        fig, ax = plt.subplots(figsize=(17, 10))
+        abs_shap['year'] = pd.to_datetime(abs_shap['year'], format='%Y')
+        abs_shap = abs_shap[abs_shap['Predictor']!='New']
+        abs_shap = abs_shap[abs_shap['Predictor']!='Rooms']
+        abs_shap['Predictor'] = abs_shap['Predictor'].map(plot_names)
+        sns.lineplot(data=abs_shap, x='year', y='SHAP_abs', hue='Predictor',
+                     ax=ax, palette='Dark2', ci='sd', markers=True, linewidth=2)
+        ax.set_ylabel("SHAP Value (Red = Positive Impact)")
+        ax.set_xlabel('')
+        ax.grid(True)
+        sns.despine(fig)
+        fig.tight_layout()
+    return abs_shap
+
+    
+def produce_abs_SHAP_from_df(shap_df, X_test, plot=False):
+    import pandas as pd
+    shap_v = pd.DataFrame(shap_df)
+    feature_list = X_test.columns
+    shap_v.columns = feature_list
+    df_v = X_test.copy().reset_index()#.drop('time', axis=1)
+    # Determine the correlation in order to plot with different colors
+    corr_list = list()
+    for i in feature_list:
+        b = np.corrcoef(shap_v[i], df_v[i])[1][0]
+        corr_list.append(b)
+    corr_df = pd.concat(
+        [pd.Series(feature_list), pd.Series(corr_list)], axis=1).fillna(0)
+    # Make a data frame. Column 1 is the feature, and Column 2 is the correlation coefficient
+    corr_df.columns = ['Predictor', 'Corr']
+    corr_df['Sign'] = np.where(corr_df['Corr'] > 0, 'red', 'blue')
+
+    # Plot it
+    shap_abs = np.abs(shap_v)
+    k = pd.DataFrame(shap_abs.mean()).reset_index()
+    k.columns = ['Predictor', 'SHAP_abs']
+    k2 = k.merge(corr_df, left_on='Predictor', right_on='Predictor', how='inner')
+    k2 = k2.sort_values(by='SHAP_abs', ascending=True)
+    if plot:
+        colorlist = k2['Sign']
+        ax = k2.plot.barh(x='Predictor', y='SHAP_abs',
+                          color=colorlist, figsize=(5, 6), legend=False)
+        ax.set_xlabel("SHAP Value (Red = Positive Impact)")
+    return k2
+    
+
 def ABS_SHAP(df_shap, df):
     import numpy as np
     import pandas as pd
@@ -208,10 +355,11 @@ def plot_simplified_shap_tree_explainer(rf_model):
     return
 
 
-def convert_shap_values_to_xarray(shap_values, X_test):
+def convert_shap_values_to_pandas(shap_values, X_test):
     import pandas as pd
     SV = pd.DataFrame(shap_values)
     SV.columns = X_test.columns
+    SV.index.name = 'sample'
     return SV
 
 
@@ -229,11 +377,11 @@ def plot_Tree_explainer_shap(rf_model, X_train, y_train, X_test, samples=1000):
         print('using just {} samples out of {}.'.format(samples, len(X_test)))
         shap_values = explainer.shap_values(sample(X_test, samples).values)
         shap.summary_plot(shap_values, sample(X_test, samples))
-        SV = convert_shap_values_to_xarray(shap_values, sample(X_test, samples))
+        SV = convert_shap_values_to_pandas(shap_values, sample(X_test, samples))
     else:
         shap_values = explainer.shap_values(X_test.values)
         shap.summary_plot(shap_values, X_test)
-        SV = convert_shap_values_to_xarray(shap_values, X_test)
+        SV = convert_shap_values_to_pandas(shap_values, X_test)
     # shap.summary_plot(shap_values_rf, dfX, plot_size=1.1)
     return SV
 # def get_mean_std_from_df_feats(df, feats=best, ignore=['New', 'Rooms_345', 'Sale_year'],
@@ -1177,18 +1325,22 @@ def plot_RF_FI_results(ds):
 
 
 def run_CV_on_all_years(df, model_name='RF', savepath=ml_path, pgrid='normal',
-                        year=None, year_start=2010):
+                        year=None, year_start=None):
     import numpy as np
     if year is None:
         years = np.arange(2000, 2020, 1)
         if year_start is not None:
             years = np.arange(year_start, 2020, 1)
         for year in years:
-            X, y, scaler = produce_X_y(df, year=year, y_name='Price', plot_Xcorr=False,
-                                       feats=features, dummy=None, scale_X=False)
+            if model_name == 'RF':
+                X_train, X_test, y_train, y_test = produce_X_y_RF_per_year(df,
+                                                                           year=year)
+            else:
+                X, y, scaler = produce_X_y(df, year=year, y_name='Price', plot_Xcorr=False,
+                                           feats=features, dummy=None, scale_X=False)
             # ml = ML_Classifier_Switcher()
             # model = ml.pick_model(model_name)
-            cross_validation(X, y, model_name=model_name, n_splits=5, pgrid=pgrid,
+            cross_validation(X_train, y_train, model_name=model_name, n_splits=5, pgrid=pgrid,
                              savepath=savepath, verbose=0, n_jobs=-1, year=year)
     else:
         X, y, scaler = produce_X_y(df, year=year, y_name='Price', plot_Xcorr=False,
@@ -1199,6 +1351,47 @@ def run_CV_on_all_years(df, model_name='RF', savepath=ml_path, pgrid='normal',
                          savepath=savepath, verbose=0, n_jobs=-1, year=year)
 
     return
+
+
+def produce_X_y_RF_per_year(df, y_name='Price', feats=best_rf+['SEI'],
+                            year=2000,
+                            test_size=0.1, verbose=1):
+    from sklearn.model_selection import train_test_split
+    import numpy as np
+    if verbose > 0:
+        print('picking year {}.'.format(year))
+    df = df[df['Sale_year'] == year]
+    if feats is not None:
+        X = df[feats].dropna()
+        if (year >= 2013) and (year <= 2015):
+            X['SEI'] = X['SEI_value_2015']
+            X = X.drop(['SEI_value_2015', 'SEI_value_2017'], axis=1)
+        elif (year >= 2016) and (year <= 2019):
+            X['SEI'] = X['SEI_value_2017']
+            X = X.drop(['SEI_value_2015', 'SEI_value_2017'], axis=1)
+        else:
+            X['SEI'] -= 3
+            X = X.drop(['SEI_value_2015', 'SEI_value_2017'], axis=1)
+    if 'Rooms' in X.columns:
+        X = X[(X['Rooms'] >= 1) & (X['Rooms'] <= 6)]
+    y = df.loc[X.index, [y_name, 'Sale_year']]
+    X = X.reset_index(drop=True)
+    if 'New' in X.columns:
+        X['New'] = X['New'].astype(int)
+    if verbose > 0:
+        print('picking {} as features.'.format([x for x in X.columns]))
+    y = y.reset_index(drop=True)
+    y = y.apply(np.log)
+    X = X.drop('Sale_year', axis=1)
+    y = y.drop('Sale_year', axis=1)
+    X_train, X_test, y_train, y_test = train_test_split(X, y,
+                                                        test_size=test_size,
+                                                        random_state=42)
+    y_train = y_train[y_name]
+    y_test = y_test[y_name]
+    if verbose > 0:
+        print('picking test size of {} which is {} records.'.format(test_size, len(y_test)))
+    return X_train, X_test, y_train, y_test
 
 
 def produce_X_y_RF(df, y_name='Price', feats=best_rf, train_years=[2015, 2016],
@@ -1407,6 +1600,9 @@ def cross_validation(X, y, model_name='RF', n_splits=5, pgrid='light',
     ml = ML_Classifier_Switcher()
     model = ml.pick_model(model_name, pgrid=pgrid)
     param_grid = ml.param_grid
+    if verbose >=0:
+        print('validating {} model with {} CV splits.'.format(model_name, n_splits))
+        print(param_grid)
     gr = GridSearchCV(model, scoring='r2', param_grid=param_grid,
                       cv=cv, verbose=verbose, n_jobs=n_jobs)
     gr.fit(X, y)
@@ -1853,11 +2049,11 @@ class ML_Classifier_Switcher(object):
                                'min_samples_split': [2, 5],
                                'n_estimators': [100, 300]}
         elif self.pgrid == 'normal':
-            self.param_grid = {'max_depth': [15, 25],
+            self.param_grid = {'max_depth': [2, 5, 7],
                                'max_features': ['auto'],
                                'min_samples_leaf': [2, 5],
                                'min_samples_split': [2, 5],
-                               'n_estimators': [500, 700]
+                               'n_estimators': [100, 200, 400]
                                }
         elif self.pgrid == 'dense':
             self.param_grid = {'max_depth': [5, 10, 25, 50, 100, 150, 250],
