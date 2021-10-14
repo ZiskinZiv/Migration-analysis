@@ -92,7 +92,7 @@ def plot_RF_time_series(X_ts):
     return fig
 
 
-def loop_over_RF_models_years(df, path=work_david/'ML', mode='score'):
+def loop_over_RF_models_years(df, path=work_david/'ML', mode='score', pgrid='normal'):
     import numpy as np
     import pandas as pd
     import shap
@@ -101,20 +101,20 @@ def loop_over_RF_models_years(df, path=work_david/'ML', mode='score'):
     train_scores = []
     test_scores = []
     x_tests = []
-    shaps = []
+    # shaps = []
     for year in years:
         print(year)
-        _, gr = load_HP_params_from_optimized_model(path, pgrid='normal',
+        _, gr = load_HP_params_from_optimized_model(path, pgrid=pgrid,
                                                     year=year)
         rf = gr.best_estimator_
         X_train, X_test, y_train, y_test = produce_X_y_RF_per_year(df,
                                                                    year=year,
                                                                    verbose=0)
+        rf.fit(X_train, y_train)
         if mode == 'score':
             train_scores.append(rf.score(X_train, y_train))
             test_scores.append(rf.score(X_test, y_test))
         elif mode == 'time-series':
-            rf.fit(X_train, y_train)
             y_pred = rf.predict(X_test)
             y_pred = np.exp(y_pred)
             X_test['Price'] = y_pred
@@ -122,15 +122,20 @@ def loop_over_RF_models_years(df, path=work_david/'ML', mode='score'):
             X_test = X_test.reset_index(drop=True)
             x_tests.append(X_test)
         elif mode == 'shap':
-            rf.fit(X_train, y_train)
+            # rf.fit(X_train, y_train)
             explainer = shap.TreeExplainer(rf)
             shap_values = explainer.shap_values(X_test.values)
             SV = convert_shap_values_to_pandas(shap_values, X_test)
-            SV = SV.to_xarray().to_array('feature')
-            shaps.append(SV)
+            filename = 'Nadlan_SHAP_RF_{}.csv'.format(year)
+            SV.to_csv(path/filename, index=False)
+            # SV = SV.to_xarray().to_array('feature')
+            # return SV, X_test
+            # shaps.append(SV)
         elif mode == 'X_test':
             X_test.index.name = 'sample'
-            x_tests.append(X_test.to_xarray().to_array('feature'))
+            filename = 'Nadlan_X_test_RF_{}.csv'.format(year)
+            X_test.to_csv(path/filename, index=False)
+            # x_tests.append(X_test.to_xarray().to_array('feature'))
     if mode == 'score':
         sc = pd.DataFrame(train_scores)
         sc.columns = ['train_r2']
@@ -140,18 +145,19 @@ def loop_over_RF_models_years(df, path=work_david/'ML', mode='score'):
     elif mode == 'time-series':
         X_ts = pd.concat(x_tests, axis=0)
         return X_ts
-    elif mode == 'shap':
-        sv_da = xr.concat(shaps, 'year')
-        sv_da['year'] = years
-        sv_da.attrs['long_name'] = 'Shapley values via SHAP Python package.'
-        sv_da.to_netcdf(path/'Nadlan_SHAP_RF_{}-{}.nc'.format(years[0], years[-1]))
-        return sv_da
-    elif mode == 'X_test':
-        X_ts = xr.concat(x_tests, 'year')
-        X_ts['year'] = years
-        X_ts.attrs['long_name'] = 'X_tests per year to use with the SHAP'
-        X_ts.to_netcdf(path/'Nadlan_X_test_RF_{}-{}.nc'.format(years[0], years[-1]))
-        return X_ts
+    # elif mode == 'shap':
+    #     sv_da = xr.concat(shaps, 'year')
+    #     sv_da['year'] = years
+    #     sv_da.attrs['long_name'] = 'Shapley values via SHAP Python package.'
+    #     sv_da.to_netcdf(path/'Nadlan_SHAP_RF_{}-{}.nc'.format(years[0], years[-1]))
+    #     return sv_da
+    # elif mode == 'X_test':
+    #     X_ts = xr.concat(x_tests, 'year')
+    #     X_ts['year'] = years
+    #     X_ts.attrs['long_name'] = 'X_tests per year to use with the SHAP'
+    #     X_ts.to_netcdf(path/'Nadlan_X_test_RF_{}-{}.nc'.format(years[0], years[-1]))
+    #     return X_ts
+
 
 def load_shap_values(path=work_david/'ML', samples=10000,
                      interaction_too=True, rename=True):
@@ -275,7 +281,7 @@ def produce_RF_abs_SHAP_all_years(path=ml_path, plot=True):
         fig.tight_layout()
     return abs_shap
 
-    
+
 def produce_abs_SHAP_from_df(shap_df, X_test, plot=False):
     import pandas as pd
     shap_v = pd.DataFrame(shap_df)
@@ -305,7 +311,7 @@ def produce_abs_SHAP_from_df(shap_df, X_test, plot=False):
                           color=colorlist, figsize=(5, 6), legend=False)
         ax.set_xlabel("SHAP Value (Red = Positive Impact)")
     return k2
-    
+
 
 def ABS_SHAP(df_shap, df):
     import numpy as np
@@ -2047,7 +2053,7 @@ class ML_Classifier_Switcher(object):
                                'max_depth': [5, 10],
                                'min_samples_leaf': [1, 2],
                                'min_samples_split': [2, 5],
-                               'n_estimators': [100, 300]}
+                               'n_estimators': [500]}
         elif self.pgrid == 'normal':
             self.param_grid = {'max_depth': [2, 5, 7],
                                'max_features': ['auto'],
