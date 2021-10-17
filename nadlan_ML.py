@@ -79,7 +79,10 @@ def plot_RF_time_series(X_ts):
     sns.set_theme(style='ticks', font_scale=1.8)
     fig, ax = plt.subplots(figsize=(17, 10))
     X_ts = X_ts[X_ts['Rooms'].isin([3, 4, 5])]
+    X_ts['Rooms'] = X_ts['Rooms'].astype(int)
     X_ts = X_ts.rename({'New': 'Status'}, axis=1)
+    X_ts['Status'][X_ts['Status']==0] = 'Old'
+    X_ts['Status'][X_ts['Status']==1] = 'New'
     X_ts['Price'] /= 1e6
     X_ts['Year'] = pd.to_datetime(X_ts['Year'], format='%Y')
     sns.lineplot(data=X_ts, x='Year', y='Price', hue='Rooms', style='Status',
@@ -159,6 +162,26 @@ def loop_over_RF_models_years(df, path=work_david/'ML', mode='score', pgrid='nor
     #     return X_ts
 
 
+def load_all_yearls_shap_values(path=work_david/'ML'):
+    import numpy as np
+    years = np.arange(2000, 2020, 1)
+    svs = []
+    X_tests = []
+    for year in years:
+        sv, X_test = load_yearly_shap_values(path, year)
+        svs.append(sv)
+        X_tests.append(X_test)
+    return svs, X_tests
+
+
+def load_yearly_shap_values(path=work_david/'ML', year=2000):
+    import pandas as pd
+    X_test = pd.read_csv(path/'Nadlan_X_test_RF_{}.csv'.format(year))
+    shap_values = pd.read_csv(path/'Nadlan_SHAP_RF_{}.csv'.format(year))
+    assert len(X_test)==len(shap_values)
+    return shap_values, X_test
+
+
 def load_shap_values(path=work_david/'ML', samples=10000,
                      interaction_too=True, rename=True):
     import pandas as pd
@@ -180,19 +203,24 @@ def load_shap_values(path=work_david/'ML', samples=10000,
 
 
 def plot_dependence(shap_values, X_test, x_feature='Rooms',
-                    y_features=['SEI', 'Distance', 'New'],
+                    y_features=['SEI', 'Distance', 'Status'],
                     alpha=0.7, cmap=None,
                     plot_size=1.5, fontsize=16):
     import shap
     import matplotlib.pyplot as plt
     import seaborn as sns
+    import matplotlib.ticker as tck
     sns.set_theme(style='ticks', font_scale=1.2)
     fig, axes = plt.subplots(len(y_features), 1, sharex=True, figsize=(8, 10))
     X = X_test.copy()
+    X = X.rename(short_plot_names, axis=1)
+    shap_values = shap_values.rename(short_plot_names, axis=1)
     X = X.rename(add_units_dict, axis=1)
     X['New'] = X['New'].astype(int)
     new_dict = {0: 'Old', 1: 'New'}
     X['New'] = X['New'].map(new_dict)
+    X = X.rename({'New': 'Status'}, axis=1)
+    shap_values = shap_values.rename({'New': 'Status'}, axis=1)
     for i, y in enumerate(y_features):
         y_new = add_units_dict.get(y, y)
         shap.dependence_plot(x_feature, shap_values.values, X, x_jitter=1,
@@ -205,6 +233,7 @@ def plot_dependence(shap_values, X_test, x_feature='Rooms',
     [ax.set_xlabel(ax.get_xlabel(), fontsize=fontsize) for ax in fig.axes]
     [ax.set_ylabel(ax.get_ylabel(), fontsize=fontsize) for ax in fig.axes]
     [ax.tick_params(labelsize=fontsize) for ax in fig.axes]
+    [ax.yaxis.set_major_locator(tck.MaxNLocator(5)) for ax in fig.axes]
     fig.tight_layout()
     return fig
 
@@ -215,6 +244,10 @@ def plot_summary_shap_values(shap_values, X_test, alpha=0.7, cmap=None,
     import seaborn as sns
     import matplotlib.pyplot as plt
     # sns.set_theme(style='ticks', font_scale=1.2)
+    X_test = X_test.rename(short_plot_names, axis=1)
+    X_test = X_test.rename({'New': 'Status'}, axis=1)
+    shap_values = shap_values.rename(short_plot_names, axis=1)
+    
     if cmap is None:
         shap.summary_plot(shap_values.values, X_test, alpha=alpha, plot_size=plot_size)
     else:
@@ -253,14 +286,13 @@ def produce_RF_abs_SHAP_all_years(path=ml_path, plot=True):
     import pandas as pd
     import seaborn as sns
     import matplotlib.pyplot as plt
-    shap_da = xr.load_dataarray(path / 'Nadlan_SHAP_RF_2000-2019.nc')
-    X_test_da = xr.load_dataarray(path / 'Nadlan_X_test_RF_2000-2019.nc')
+    SVs, X_tests = load_all_yearls_shap_values(path)
     k2s = []
-    for year in np.arange(2000, 2020, 1):
-        shap_df = shap_da.sel(year=year).to_dataset('feature').to_dataframe().dropna()
-        shap_df.drop('year', axis=1, inplace=True)
-        X_test = X_test_da.sel(year=year).to_dataset('feature').to_dataframe().dropna()
-        X_test.drop('year', axis=1, inplace=True)
+    for i, year in enumerate(np.arange(2000, 2020, 1)):
+        shap_df = SVs[i]
+        # shap_df.drop('year', axis=1, inplace=True)
+        X_test = X_tests[i]
+        # X_test.drop('year', axis=1, inplace=True)
         k2 = produce_abs_SHAP_from_df(shap_df, X_test, plot=False)
         k2['year'] = year
         k2s.append(k2)
@@ -272,9 +304,12 @@ def produce_RF_abs_SHAP_all_years(path=ml_path, plot=True):
         abs_shap = abs_shap[abs_shap['Predictor']!='New']
         abs_shap = abs_shap[abs_shap['Predictor']!='Rooms']
         abs_shap['Predictor'] = abs_shap['Predictor'].map(plot_names)
+        abs_shap['SHAP_abs'] *= np.sign(abs_shap['Corr'])
+        order = ['Social-Economic Index', 'Building rate', 'Distance to ECs', 'Net migration']
         sns.lineplot(data=abs_shap, x='year', y='SHAP_abs', hue='Predictor',
-                     ax=ax, palette='Dark2', ci='sd', markers=True, linewidth=2)
-        ax.set_ylabel("SHAP Value (Red = Positive Impact)")
+                     ax=ax, palette='Dark2', ci='sd', markers=True, linewidth=2,
+                     hue_order=order)
+        ax.set_ylabel("mean SHAP Values")
         ax.set_xlabel('')
         ax.grid(True)
         sns.despine(fig)
