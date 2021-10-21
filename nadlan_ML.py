@@ -2,12 +2,10 @@
 # -*- coding: utf-8 -*-
 """
 Created on Fri Jul  2 15:41:04 2021
-Strategy:
--1) show mokdim_28 high corr to Priph_value
-0) pre-process Rooms to continous variable
-1) do MLR baseline with all best features (standartscaler)
-2) do MLR without big predictors (SEI & mean mokdim)
-3) do RF train/validate on 2015 and test on 2017, feature importances
+Run MLR hedonic with run_MLR_on_all_years(features=best1)
+For RF, HP tuning :
+    
+Run RF with
 @author: shlomi
 """
 from MA_paths import work_david
@@ -28,6 +26,9 @@ features3 = ['Floor_number', 'SEI', 'New', 'Periph_value', 'Sale_year', 'Rooms_3
 best = ['SEI', 'New', 'Sale_year', 'Rooms_345',
         'Total_ends', 'mean_distance_to_28_mokdim', 'Netflow']
 
+best1 = ['SEI', 'New', 'Sale_year', 'Rooms_345',
+        'Total_ends', 'mean_distance_to_28_mokdim']
+
 best_years = best + ['year_{}'.format(x) for x in np.arange(2001, 2020)]
 best_for_bs = best + ['city_code', 'Price']
 
@@ -37,6 +38,9 @@ next_best = ['Floor_number', 'New', 'Sale_year', 'Rooms',
 best_rf = ['SEI_value_2015', 'SEI_value_2017',
            'New', 'Sale_year', 'Rooms','Netflow',
            'Total_ends', 'mean_distance_to_28_mokdim']
+best_rf1 = ['SEI_value_2015', 'SEI_value_2017',
+           'New', 'Sale_year', 'Rooms',
+           'Total_ends', 'mean_distance_to_28_mokdim']
 
 dummies = ['New', 'Rooms_4', 'Rooms_5']
 
@@ -45,6 +49,8 @@ year_dummies = ['year_{}'.format(x) for x in np.arange(2001,2020)]
 room_dummies = ['Rooms_4', 'Rooms_5']
 
 best_regular = ['SEI', 'Total_ends', 'mean_distance_to_28_mokdim', 'Netflow']
+best_regular1 = ['SEI', 'Total_ends', 'mean_distance_to_28_mokdim']
+
 
 apts = ['דירה', 'דירה בבית קומות']
 apts_more = apts + ["קוטג' דו משפחתי", "קוטג' חד משפחתי",
@@ -65,14 +71,48 @@ plot_names = {'Floor_number': 'Floor',
               }
 
 short_plot_names = {'Total_ends': 'BR',
-                    'mean_distance_to_28_mokdim': 'Distance'}
+                    'mean_distance_to_28_mokdim': 'Distance',
+                    'SEI': 'SEI'}
 
 add_units_dict = {'Distance': 'Distance [km]', 'BR': r'BR [Apts$\cdot$yr$^{-1}$]',
                   'Netflow': r'Netflow [people$\cdot$yr$^{-1}$]'}
 # AHP : Afforable Housing Program
 
 
-def plot_RF_time_series(X_ts):
+def remove_outlier_area_per_room(df, col='Area_m2', k=1.5):
+    from Migration_main import remove_outlier
+    import pandas as pd
+    dfs = []
+    for room in df['Rooms'].dropna().unique():
+        df1 = remove_outlier(df[df['Rooms'] == room], col_name=col, k=k)
+        dfs.append(df1)
+    df = pd.concat(dfs, axis=0)
+    return df
+
+
+def plot_rooms_area_distribution(df, units='m2'):
+    import seaborn as sns
+    import matplotlib.pyplot as plt
+    sns.set_theme(style='ticks', font_scale=1.8)
+    fig, ax = plt.subplots(figsize=(17, 10))
+    if units == 'ft2':
+        df['Area_ft2'] = df['Area_m2'] * 10.764
+        col = 'Area_ft2'
+        unit_label = 'ft$^2$'
+    elif units == 'm2':
+        col = 'Area_m2'
+        unit_label = 'm$^2$'
+    sns.violinplot(data=df, x='Rooms', y=col, ax=ax, palette='inferno')
+    ax.set_ylabel('Apartment area [{}]'.format(unit_label))
+    ax.set_xlabel('Number of rooms')
+    ax.grid(True)
+    sns.despine(fig)
+    fig.tight_layout()
+    return fig
+
+
+def plot_RF_time_series(X_ts, normalize_to_us_dollars=4):
+    """plot rooms new time series from RF model"""
     import seaborn as sns
     import matplotlib.pyplot as plt
     import pandas as pd
@@ -83,11 +123,16 @@ def plot_RF_time_series(X_ts):
     X_ts = X_ts.rename({'New': 'Status'}, axis=1)
     X_ts['Status'][X_ts['Status']==0] = 'Old'
     X_ts['Status'][X_ts['Status']==1] = 'New'
-    X_ts['Price'] /= 1e6
+    if normalize_to_us_dollars is not None:
+        X_ts['Price'] /= normalize_to_us_dollars * 1000
+        ylabel = 'Apartment Price [Thousands $]'
+    else:
+        X_ts['Price'] /= 1e6
+        ylabel = 'Apartment Price [millions NIS]'
     X_ts['Year'] = pd.to_datetime(X_ts['Year'], format='%Y')
     sns.lineplot(data=X_ts, x='Year', y='Price', hue='Rooms', style='Status',
                  ax=ax, palette='tab10', markers=True)
-    ax.set_ylabel('Apartment Price [millions NIS]')
+    ax.set_ylabel(ylabel)
     ax.set_xlabel('')
     ax.grid(True)
     sns.despine(fig)
@@ -95,7 +140,8 @@ def plot_RF_time_series(X_ts):
     return fig
 
 
-def loop_over_RF_models_years(df, path=work_david/'ML', mode='score', pgrid='normal'):
+def loop_over_RF_models_years(df, path=work_david/'ML', mode='score',
+                              pgrid='normal'):
     import numpy as np
     import pandas as pd
     import shap
@@ -477,29 +523,47 @@ def produce_rooms_new_years_from_ds_var(ds, dsvar='beta_coef', new_cat='Status',
     return dff
 
 
-def plot_price_rooms_new_from_new_ds(ds):
+def plot_price_rooms_new_from_new_ds(ds, add_cbs_index=False,
+                                     normalize_to_us_dollars=4):
     import seaborn as sns
     import matplotlib.pyplot as plt
     import pandas as pd
+    from cbs_procedures import read_apt_price_index
     sns.set_theme(style='ticks', font_scale=1.8)
     fig, ax = plt.subplots(figsize=(17, 10))
     beta = produce_rooms_new_years_from_ds_var(ds, 'beta_coef')
     upper = produce_rooms_new_years_from_ds_var(ds, 'CI_95_upper')
     lower = produce_rooms_new_years_from_ds_var(ds, 'CI_95_lower')
     df = pd.concat([lower, beta, upper], axis=0)
-    df['Price'] /= 1e6
+    
+    if normalize_to_us_dollars is not None:
+        # approx 4 NIS to 1 $ in whole 2000-2019
+        df['Price'] /= normalize_to_us_dollars * 1000  # price in thousands of $
+        ylabel = 'Apartment Price [Thousands $]'
+    else:
+        ylabel = 'Apartment Price [millions NIS]'
+        df['Price'] /= 1e6
     df['year'] = pd.to_datetime(df['year'], format='%Y')
     sns.lineplot(data=df, x='year', y='Price', hue='Rooms', style='Status',
                  ax=ax, palette='tab10', ci='sd', markers=True)
-    ax.set_ylabel('Apartment Price [millions NIS]')
+    ax.set_ylabel(ylabel)
     ax.set_xlabel('')
+    if add_cbs_index:
+        cbs = read_apt_price_index(path=work_david, resample='AS',
+                                   normalize_year=2000)
+        cbs = cbs.loc['2000':'2019']
+        cbs.columns = ['Apartment Price Index']
+        cbs['year'] = pd.to_datetime(cbs.index, format='%Y')
+        twin = ax.twinx()
+        sns.lineplot(data=cbs, x='year', y='Apartment Price Index', ax=twin, color='k', linewidth=2)
     ax.grid(True)
     sns.despine(fig)
     fig.tight_layout()
     return fig
 
 
-def plot_regular_feats_comparison_from_new_ds(ds,reg_name='Predictor'):
+def plot_regular_feats_comparison_from_new_ds(ds,reg_name='Predictor',
+                                              feats=best_regular1):
     import seaborn as sns
     import matplotlib.pyplot as plt
     import pandas as pd
@@ -507,19 +571,19 @@ def plot_regular_feats_comparison_from_new_ds(ds,reg_name='Predictor'):
     fig, ax = plt.subplots(figsize=(17, 10))
     dfs = []
     df = ds['beta_coef'].to_dataset('year').to_dataframe().T
-    dff = df[best_regular].melt(ignore_index=False)
+    dff = df[feats].melt(ignore_index=False)
     dff['year'] = dff.index
     dfs.append(dff)
     df = ds['CI_95_upper'].to_dataset('year').to_dataframe().T
-    dff = df[best_regular].melt(ignore_index=False)
+    dff = df[feats].melt(ignore_index=False)
     dff['year'] = dff.index
     dfs.append(dff)
     df = ds['CI_95_lower'].to_dataset('year').to_dataframe().T
-    dff = df[best_regular].melt(ignore_index=False)
+    dff = df[feats].melt(ignore_index=False)
     dff['year'] = dff.index
     dfs.append(dff)
     dff = pd.concat(dfs, axis=0)
-    dff['regressor'] = dff['regressor'].map(plot_names)
+    dff['regressor'] = dff['regressor'].map(short_plot_names)
     dff = dff.rename({'regressor': reg_name}, axis=1)
     dff['year'] = pd.to_datetime(dff['year'], format='%Y')
     sns.lineplot(data=dff, x='year', y='value', hue=reg_name,
@@ -533,7 +597,7 @@ def plot_regular_feats_comparison_from_new_ds(ds,reg_name='Predictor'):
     return dff
 
 
-def prepare_new_X_y_with_year(df, year=2000, y_name='Price'):
+def prepare_new_X_y_with_year(df, year=2000, y_name='Price', features=best1):
     import pandas as pd
 
     def return_X_with_interaction(X, dummy_list, var_list):
@@ -548,7 +612,7 @@ def prepare_new_X_y_with_year(df, year=2000, y_name='Price'):
 
     # m, s = get_mean_std_from_df_feats(df)
     X, y, scaler = produce_X_y(
-        df, y_name=y_name, year=year, feats=best, dummy='Rooms_345',
+        df, y_name=y_name, year=year, feats=features, dummy='Rooms_345',
         plot_Xcorr=True, scale_X=True)
     # X[best_regular] -= m
     # X[best_regular] /= s
@@ -915,9 +979,11 @@ def scale_df(df, scaler, cols=None):
     return df_scaled, scaler
 
 
-def load_nadlan_with_features(path=work_david, years=[2000, 2019], asset_type=apts, mokdim_version=False):
+def load_nadlan_with_features(path=work_david, years=[2000, 2019], asset_type=apts,
+                              mokdim_version=False):
     import pandas as pd
     from cbs_procedures import read_price_index
+    from nadlan_procedures import remove_outlier_by_value_counts
 
     def add_inflation_func(grp, pi,name='Price_inflation_fixed'):
         year = grp['Sale_year'].unique()[0]
@@ -953,6 +1019,14 @@ def load_nadlan_with_features(path=work_david, years=[2000, 2019], asset_type=ap
         df['trend'] = df.index.to_julian_date()
         df['trend'] -= df['trend'].iloc[0]
         df['trend'] /= df['trend'].iloc[-1]
+        # remove number of rooms that are rare:
+        df = remove_outlier_by_value_counts(df, 'Rooms', thresh=900)
+        # remove outliers in rooms:
+        df = remove_outlier_area_per_room(df, col='Area_m2', k=1.5)
+        # remove 1 rooms with area > 50 m^2:
+        d = df[df['Rooms']==1]['Area_m2'].dropna()
+        inds = d[d>50].index
+        df = df.drop(inds, axis=0)
         df = df.reset_index(drop=True)
     return df
 
@@ -1034,7 +1108,7 @@ def convert_statsmodels_object_results_to_xarray(est):
     return ds
 
 
-def run_MLR_on_all_years(df, feats=features, dummy='Rooms_345', scale_X=False):
+def run_MLR_on_all_years(df, feats=best1, dummy='Rooms_345', scale_X=False):
     import numpy as np
     import xarray as xr
     import statsmodels.api as sm
@@ -1043,7 +1117,7 @@ def run_MLR_on_all_years(df, feats=features, dummy='Rooms_345', scale_X=False):
     years = np.arange(2000, 2020, 1)
     das = []
     for year in years:
-        X, y = prepare_new_X_y_with_year(df, year=year, y_name='Price')
+        X, y = prepare_new_X_y_with_year(df, features=best1, year=year, y_name='Price')
         # X, y, scaler = produce_X_y(df, year=year, y_name='Price', plot_Xcorr=False,
                                    # feats=feats, dummy=dummy, scale_X=scale_X)
         vif = calc_vif(X).set_index('variables')
@@ -1394,7 +1468,7 @@ def run_CV_on_all_years(df, model_name='RF', savepath=ml_path, pgrid='normal',
     return
 
 
-def produce_X_y_RF_per_year(df, y_name='Price', feats=best_rf+['SEI'],
+def produce_X_y_RF_per_year(df, y_name='Price', feats=best_rf1+['SEI'],
                             year=2000,
                             test_size=0.1, verbose=1):
     from sklearn.model_selection import train_test_split
@@ -1435,66 +1509,66 @@ def produce_X_y_RF_per_year(df, y_name='Price', feats=best_rf+['SEI'],
     return X_train, X_test, y_train, y_test
 
 
-def produce_X_y_RF(df, y_name='Price', feats=best_rf, train_years=[2015, 2016],
-                   test_years=[2017, 2018]):
-    from sklearn.preprocessing import StandardScaler
-    # from sklearn.preprocessing import MinMaxScaler
-    # import numpy as np
-    import pandas as pd
-    print('picking {} as train years.'.format(','.join([str(x) for x in train_years])))
-    print('picking {} as test years.'.format(','.join([str(x) for x in test_years])))
-    df = df[df['Sale_year'].isin(train_years+test_years)]
-    if feats is not None:
-        print('picking {} as features.'.format(feats))
-        X = df[feats].dropna()
-    if 'Rooms' in X.columns:
-        X = X[(X['Rooms']>=1) & (X['Rooms']<=6)]
-    y = df.loc[X.index, [y_name, 'Sale_year']]
-    X = X.reset_index(drop=True)
-    if 'New' in X.columns:
-        X['New'] = X['New'].astype(int)
-    if 'MISH' in X.columns:
-        X['MISH'] = X['MISH'].astype(int)
-    # if 'Total_ends' in X.columns:
-    #     X['Total_ends'] /= 1000
-    # if 'Netflow' in X.columns:
-    #     X['Netflow'] /= 10000
-    y = y.reset_index(drop=True)
-    # if dummy is not None:
-    #     prefix = dummy.split('_')[0]
-    #     rooms = pd.get_dummies(data=X[dummy], prefix=prefix)
-    #     # drop one col from one-hot encoding not to fall into dummy trap!:
-    #     X = pd.concat([X, rooms.drop('Rooms_4', axis=1)], axis=1)
-    #     X = X.drop([dummy], axis=1)
+# def produce_X_y_RF(df, y_name='Price', feats=best_rf, train_years=[2015, 2016],
+#                    test_years=[2017, 2018]):
+#     from sklearn.preprocessing import StandardScaler
+#     # from sklearn.preprocessing import MinMaxScaler
+#     # import numpy as np
+#     import pandas as pd
+#     print('picking {} as train years.'.format(','.join([str(x) for x in train_years])))
+#     print('picking {} as test years.'.format(','.join([str(x) for x in test_years])))
+#     df = df[df['Sale_year'].isin(train_years+test_years)]
+#     if feats is not None:
+#         print('picking {} as features.'.format(feats))
+#         X = df[feats].dropna()
+#     if 'Rooms' in X.columns:
+#         X = X[(X['Rooms']>=1) & (X['Rooms']<=6)]
+#     y = df.loc[X.index, [y_name, 'Sale_year']]
+#     X = X.reset_index(drop=True)
+#     if 'New' in X.columns:
+#         X['New'] = X['New'].astype(int)
+#     if 'MISH' in X.columns:
+#         X['MISH'] = X['MISH'].astype(int)
+#     # if 'Total_ends' in X.columns:
+#     #     X['Total_ends'] /= 1000
+#     # if 'Netflow' in X.columns:
+#     #     X['Netflow'] /= 10000
+#     y = y.reset_index(drop=True)
+#     # if dummy is not None:
+#     #     prefix = dummy.split('_')[0]
+#     #     rooms = pd.get_dummies(data=X[dummy], prefix=prefix)
+#     #     # drop one col from one-hot encoding not to fall into dummy trap!:
+#     #     X = pd.concat([X, rooms.drop('Rooms_4', axis=1)], axis=1)
+#     #     X = X.drop([dummy], axis=1)
 
-    # X = scale_log(X, cols=[x for x in X.columns if x not in dummies], plus1_cols=[
-    #               'Total_ends', 'Floor_number'])
+#     # X = scale_log(X, cols=[x for x in X.columns if x not in dummies], plus1_cols=[
+#     #               'Total_ends', 'Floor_number'])
 
-    yscaler = StandardScaler()
-    #yscaler = MinMaxScaler()
-    # yscaler = PowerTransformer(method='yeo-johnson',standardize=True)
-    y_train = y[y['Sale_year'].isin(train_years)].apply(np.log)
-    y_test = y[y['Sale_year'].isin(test_years)].apply(np.log)
-    # y_train = yscaler.fit_transform(y_train[y_name].values.reshape(-1,1))
-    # y_test = yscaler.fit_transform(y_test[y_name].values.reshape(-1,1))
-    # y_train = pd.DataFrame(y_train, columns=[y_name])
-    # y_test = pd.DataFrame(y_test, columns=[y_name])
-    # y_test = y_test.apply(np.log)
-    # # y_scaled = yscaler.fit_transform(y_scaled.values.reshape(-1,1))
-    # y_train = pd.DataFrame(y_train, columns=[y_name])
-    # y_test = pd.DataFrame(y_test, columns=[y_name])
-    # scale X:
-    # cols_to_scale = [x for x in X.columns if x != 'Sale_year']
-    # X, scaler = scale_df(X, cols=cols_to_scale, scaler=Xscaler)
-    X_train = X[X['Sale_year'].isin(train_years)].drop('Sale_year', axis=1).astype(float)
-    X_train.drop('SEI_value_2017', axis=1, inplace=True)
-    X_test = X[X['Sale_year'].isin(test_years)].drop('Sale_year', axis=1).astype(float)
-    X_test.drop('SEI_value_2015', axis=1, inplace=True)
-    X_train = X_train.rename({'SEI_value_2015': 'SEI'}, axis=1)
-    X_test = X_test.rename({'SEI_value_2017': 'SEI'}, axis=1)
-    y_train = y_train[y_name]
-    y_test = y_test[y_name]
-    return X_train, y_train, X_test, y_test # , Xscaler
+#     yscaler = StandardScaler()
+#     #yscaler = MinMaxScaler()
+#     # yscaler = PowerTransformer(method='yeo-johnson',standardize=True)
+#     y_train = y[y['Sale_year'].isin(train_years)].apply(np.log)
+#     y_test = y[y['Sale_year'].isin(test_years)].apply(np.log)
+#     # y_train = yscaler.fit_transform(y_train[y_name].values.reshape(-1,1))
+#     # y_test = yscaler.fit_transform(y_test[y_name].values.reshape(-1,1))
+#     # y_train = pd.DataFrame(y_train, columns=[y_name])
+#     # y_test = pd.DataFrame(y_test, columns=[y_name])
+#     # y_test = y_test.apply(np.log)
+#     # # y_scaled = yscaler.fit_transform(y_scaled.values.reshape(-1,1))
+#     # y_train = pd.DataFrame(y_train, columns=[y_name])
+#     # y_test = pd.DataFrame(y_test, columns=[y_name])
+#     # scale X:
+#     # cols_to_scale = [x for x in X.columns if x != 'Sale_year']
+#     # X, scaler = scale_df(X, cols=cols_to_scale, scaler=Xscaler)
+#     X_train = X[X['Sale_year'].isin(train_years)].drop('Sale_year', axis=1).astype(float)
+#     X_train.drop('SEI_value_2017', axis=1, inplace=True)
+#     X_test = X[X['Sale_year'].isin(test_years)].drop('Sale_year', axis=1).astype(float)
+#     X_test.drop('SEI_value_2015', axis=1, inplace=True)
+#     X_train = X_train.rename({'SEI_value_2015': 'SEI'}, axis=1)
+#     X_test = X_test.rename({'SEI_value_2017': 'SEI'}, axis=1)
+#     y_train = y_train[y_name]
+#     y_test = y_test[y_name]
+#     return X_train, y_train, X_test, y_test # , Xscaler
 
 
 def produce_X_y(df, year=2015, y_name='Price', plot_Xcorr=True,
