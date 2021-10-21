@@ -626,6 +626,56 @@ def read_price_index(path=work_david,
     return df
 
 
+def read_apt_price_index(path=work_david,
+                         filename='CBS_Old_Apt_prices_index.xlsx',
+                         resample='AS', normalize_year=2000):
+    import pandas as pd
+    df = pd.read_excel(path/filename, skiprows=22)
+    df.columns = ['item', 'year', 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+    df['item'] = df['item'].str.replace(
+        '40010 - מחירי דירות', 'price_index')
+    df = df.melt(var_name='month', id_vars=[
+                 'item', 'year'], value_name='index_value')
+    df['dt'] = pd.to_datetime(df['year'].astype(
+        str) + '-' + df['month'].astype(str), format='%Y-%m')
+    df.drop(['month', 'year'], axis=1, inplace=True)
+    df = df.pivot_table(index=['dt'], columns=['item'])
+    df.columns = df.columns.droplevel(0)
+    df.index.name = ''
+    df.columns = [df.columns[0]]
+    # df = df.drop('item', axis=1)
+    if resample is not None:
+        print('resampling to {}'.format(resample))
+        df = df.resample(resample).mean()
+        if normalize_year is not None:
+            value = df[df.index.year==normalize_year].values
+            df /= value
+            df *= 100
+    return df
+
+
+def read_currency_dollar_nis(path=work_david):
+    import pandas as pd
+    y1 = pd.read_excel(path/'yazig_1997.xls')
+    y1 = y1[['DATE', 'US']].dropna()
+    y1.set_index(pd.to_datetime(y1['DATE'], format='%y-%m-%d'), inplace=True)
+    y1 = y1.drop('DATE', axis=1)
+    y2 = pd.read_excel(path/'yazig_2001.xls')
+    y2 = y2[['DATE', 'US']].dropna()
+    y2.set_index(pd.to_datetime(y2['DATE'], format='%y-%m-%d'), inplace=True)
+    y2 = y2.drop('DATE', axis=1)
+    y3 = pd.read_excel(path/'yazig_2007.xls')
+    y3 = y3[['DATE', 'US']].dropna()
+    y3.set_index(pd.to_datetime(y3['DATE'], format='%y-%m-%d'), inplace=True)
+    y3 = y3.drop('DATE', axis=1)
+    y4 = pd.read_excel(path/'yazig_2013.xlsx')
+    y4 = y4[['DATE', 'US DOLLAR']].dropna()
+    y4.set_index('DATE', inplace=True)
+    y4.columns = ['US']
+    df = pd.concat([y1, y2, y3, y4], axis=0).sort_index()
+    return df
+
+
 def read_boi_mortgage(path=work_david, filename='pribmash.xls',
                       rolling=6):
     import pandas as pd
