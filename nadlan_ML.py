@@ -4,7 +4,7 @@
 Created on Fri Jul  2 15:41:04 2021
 Run MLR hedonic with run_MLR_on_all_years(features=best1)
 For RF, HP tuning :
-    
+
 Run RF with
 @author: shlomi
 """
@@ -293,7 +293,7 @@ def plot_summary_shap_values(shap_values, X_test, alpha=0.7, cmap=None,
     X_test = X_test.rename(short_plot_names, axis=1)
     X_test = X_test.rename({'New': 'Status'}, axis=1)
     shap_values = shap_values.rename(short_plot_names, axis=1)
-    
+
     if cmap is None:
         shap.summary_plot(shap_values.values, X_test, alpha=alpha, plot_size=plot_size)
     else:
@@ -351,7 +351,7 @@ def produce_RF_abs_SHAP_all_years(path=ml_path, plot=True):
         abs_shap = abs_shap[abs_shap['Predictor']!='Rooms']
         abs_shap['Predictor'] = abs_shap['Predictor'].map(plot_names)
         abs_shap['SHAP_abs'] *= np.sign(abs_shap['Corr'])
-        order = ['Social-Economic Index', 'Building rate', 'Distance to ECs', 'Net migration']
+        order = ['Social-Economic Index', 'Building rate', 'Distance to ECs']
         sns.lineplot(data=abs_shap, x='year', y='SHAP_abs', hue='Predictor',
                      ax=ax, palette='Dark2', ci='sd', markers=True, linewidth=2,
                      hue_order=order)
@@ -535,7 +535,7 @@ def plot_price_rooms_new_from_new_ds(ds, add_cbs_index=False,
     upper = produce_rooms_new_years_from_ds_var(ds, 'CI_95_upper')
     lower = produce_rooms_new_years_from_ds_var(ds, 'CI_95_lower')
     df = pd.concat([lower, beta, upper], axis=0)
-    
+
     if normalize_to_us_dollars is not None:
         # approx 4 NIS to 1 $ in whole 2000-2019
         df['Price'] /= normalize_to_us_dollars * 1000  # price in thousands of $
