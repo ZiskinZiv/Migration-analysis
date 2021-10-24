@@ -9,6 +9,7 @@ Run RF with
 @author: shlomi
 """
 from MA_paths import work_david
+from MA_paths import savefig_path
 import numpy as np
 ml_path = work_david / 'ML'
 features = ['Floor_number', 'SEI', 'New', 'Periph_value', 'Sale_year', 'Rooms_345',
@@ -77,6 +78,54 @@ short_plot_names = {'Total_ends': 'BR',
 add_units_dict = {'Distance': 'Distance [km]', 'BR': r'BR [Apts$\cdot$yr$^{-1}$]',
                   'Netflow': r'Netflow [people$\cdot$yr$^{-1}$]'}
 # AHP : Afforable Housing Program
+
+
+def plot_single_tree(rf_model, X_train, y_train, est_index=100, samples=10, max_depth=None):
+    from sklearn import tree
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+    import numpy as np
+    feats = ['Status', 'Rooms', 'BR', 'Distance', 'SEI']
+    sns.set_theme(font_scale=1.8)
+    fig, ax = plt.subplots(figsize=(17, 10))
+    inds = X_train.sample(n=samples).index
+    y_train = np.log(np.exp(y_train)/4)
+    rf_model.fit(X_train.loc[inds], y_train.loc[inds])
+    _ = tree.plot_tree(rf_model[est_index],
+                       feature_names=feats, filled=True, ax=ax, max_depth=max_depth, fontsize=13)
+    filename = 'Nadlan_tree_example.png'
+    plt.savefig(savefig_path / filename, bbox_inches='tight', pad_inches=0.1)
+    return fig
+
+
+    
+def compare_r2_RF_MLR(sc, ds, mode='diagram'):
+    """compare R2 score from dataset (sc=loop_over with mode=score)
+    and ds=run_MLR_on_all_years"""
+    import pandas as pd
+    import seaborn as sns
+    import matplotlib.pyplot as plt
+    sns.set_theme(style='ticks', font_scale=1.8)
+    fig, ax = plt.subplots(figsize=(17, 10))
+    df = ds['R-squared'].to_dataframe()
+    df = pd.concat([df, sc], axis=1)
+    df.columns = ['Hedonic', 'RF train', 'RF test']
+    df['year'] = df.index
+    df = df.melt(id_vars=['year'], var_name='Model',
+                 value_name=r'R$^2$')
+    # df['year'] = pd.to_datetime(df['year'], format='%Y')
+    if mode == 'diagram':
+        ax = sns.barplot(data=df, x='year', ax=ax, hue='Model', y=r'R$^2$')
+        # ax.set_ylabel('Apartment area [{}]'.format(unit_label))
+        h, l =ax.get_legend_handles_labels()
+        ax.legend_.remove()
+        ax.legend(h, l, ncol=3, title='Model')
+        ax.set_xlabel('')
+        ax.grid(True)
+        sns.despine(fig)
+        fig.tight_layout()
+
+    return df
 
 
 def remove_outlier_area_per_room(df, col='Area_m2', k=1.5):
