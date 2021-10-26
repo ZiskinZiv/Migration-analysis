@@ -98,7 +98,7 @@ def plot_single_tree(rf_model, X_train, y_train, est_index=100, samples=10, max_
     return fig
 
 
-    
+
 def compare_r2_RF_MLR(sc, ds, mode='diagram'):
     """compare R2 score from dataset (sc=loop_over with mode=score)
     and ds=run_MLR_on_all_years"""
@@ -180,13 +180,35 @@ def plot_RF_time_series(X_ts, normalize_to_us_dollars=4):
         ylabel = 'Apartment Price [millions NIS]'
     X_ts['Year'] = pd.to_datetime(X_ts['Year'], format='%Y')
     sns.lineplot(data=X_ts, x='Year', y='Price', hue='Rooms', style='Status',
-                 ax=ax, palette='tab10', markers=True)
+                 ax=ax, palette='tab10', markers=True, markersize=10)
     ax.set_ylabel(ylabel)
     ax.set_xlabel('')
     ax.grid(True)
     sns.despine(fig)
     fig.tight_layout()
     return fig
+
+
+def produce_shap_MLR_all_years(df, feats=best1, abs_val=True):
+    from sklearn.linear_model import LinearRegression
+    import shap
+    import numpy as np
+    years = np.arange(2000, 2020, 1)
+    svs = []
+    for year in years:
+        print(year)
+        X, y = prepare_new_X_y_with_year(df, features=feats, year=year,
+                                         y_name='Price')
+        lr = LinearRegression()
+        lr.fit(X, y)
+        ex = shap.LinearExplainer(lr, X)
+        shap_values = ex.shap_values(X)
+        SV = convert_shap_values_to_pandas(shap_values, X)
+        if abs_val:
+            print('producing ABS SHAP.')
+            SV = produce_abs_SHAP_from_df(SV, X, plot=False)
+        svs.append(SV)
+    return svs
 
 
 def loop_over_RF_models_years(df, path=work_david/'ML', mode='score',
@@ -375,7 +397,7 @@ def select_years_interaction_term(ds, regressor='SEI'):
     return ds
 
 
-def produce_RF_abs_SHAP_all_years(path=ml_path, plot=True):
+def produce_RF_abs_SHAP_all_years(path=ml_path, plot=True, mlr_shap=None):
     import xarray as xr
     import numpy as np
     import pandas as pd
@@ -390,6 +412,13 @@ def produce_RF_abs_SHAP_all_years(path=ml_path, plot=True):
         # X_test.drop('year', axis=1, inplace=True)
         k2 = produce_abs_SHAP_from_df(shap_df, X_test, plot=False)
         k2['year'] = year
+        if mlr_shap is not None:
+            k2['Model'] = 'RF'
+            k2_mlr = mlr_shap[i]
+            k2_mlr['year'] = year
+            k2_mlr['Model'] = 'Hedonic'
+            k2_mlr = k2_mlr[k2_mlr['Predictor'].isin(best_regular1)]
+            k2 = pd.concat([k2, k2_mlr], axis=0)
         k2s.append(k2)
     abs_shap = pd.concat(k2s, axis=0)
     if plot:
@@ -401,12 +430,20 @@ def produce_RF_abs_SHAP_all_years(path=ml_path, plot=True):
         abs_shap['Predictor'] = abs_shap['Predictor'].map(plot_names)
         abs_shap['SHAP_abs'] *= np.sign(abs_shap['Corr'])
         order = ['Social-Economic Index', 'Building rate', 'Distance to ECs']
-        sns.lineplot(data=abs_shap, x='year', y='SHAP_abs', hue='Predictor',
-                     ax=ax, palette='Dark2', ci='sd', markers=True, linewidth=2,
-                     hue_order=order)
+        if mlr_shap is not None:
+            sns.lineplot(data=abs_shap, x='year', y='SHAP_abs', hue='Predictor',
+                         ax=ax, palette='Dark2', ci='sd', markers=True, linewidth=2,
+                         hue_order=order, style='Model', markersize=10)
+        else:
+            sns.lineplot(data=abs_shap, x='year', y='SHAP_abs', hue='Predictor',
+                         ax=ax, palette='Dark2', ci='sd', markers=True, linewidth=2,
+                         hue_order=order, markersize=10)
         ax.set_ylabel("mean SHAP Values")
         ax.set_xlabel('')
         ax.grid(True)
+        h, l =ax.get_legend_handles_labels()
+        ax.legend_.remove()
+        ax.legend(h, l, ncol=2, loc='center')
         sns.despine(fig)
         fig.tight_layout()
     return abs_shap
@@ -594,7 +631,7 @@ def plot_price_rooms_new_from_new_ds(ds, add_cbs_index=False,
         df['Price'] /= 1e6
     df['year'] = pd.to_datetime(df['year'], format='%Y')
     sns.lineplot(data=df, x='year', y='Price', hue='Rooms', style='Status',
-                 ax=ax, palette='tab10', ci='sd', markers=True)
+                 ax=ax, palette='tab10', ci='sd', markers=True, markersize=10)
     ax.set_ylabel(ylabel)
     ax.set_xlabel('')
     if add_cbs_index:
@@ -632,7 +669,7 @@ def plot_regular_feats_comparison_from_new_ds(ds,reg_name='Predictor',
     dff['year'] = dff.index
     dfs.append(dff)
     dff = pd.concat(dfs, axis=0)
-    dff['regressor'] = dff['regressor'].map(short_plot_names)
+    dff['regressor'] = dff['regressor'].map(plot_names)
     dff = dff.rename({'regressor': reg_name}, axis=1)
     dff['year'] = pd.to_datetime(dff['year'], format='%Y')
     sns.lineplot(data=dff, x='year', y='value', hue=reg_name,
@@ -640,6 +677,9 @@ def plot_regular_feats_comparison_from_new_ds(ds,reg_name='Predictor',
                  palette='Dark2')
     ax.set_ylabel(r'Standardized $\beta$s')
     ax.set_xlabel('')
+    h, l = ax.get_legend_handles_labels()
+    ax.legend_.remove()
+    ax.legend(h, l, ncol=1, title='Predictor', loc='center')
     ax.grid(True)
     sns.despine(fig)
     fig.tight_layout()
