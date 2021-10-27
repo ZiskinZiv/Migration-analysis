@@ -80,6 +80,11 @@ add_units_dict = {'Distance': 'Distance [km]', 'BR': r'BR [Apts$\cdot$yr$^{-1}$]
 # AHP : Afforable Housing Program
 
 
+def pct_change(x):
+    import numpy as np
+    return (np.exp(x)-1)*100
+
+    
 def plot_single_tree(rf_model, X_train, y_train, est_index=100, samples=10, max_depth=None):
     from sklearn import tree
     import matplotlib.pyplot as plt
@@ -321,7 +326,7 @@ def load_shap_values(path=work_david/'ML', samples=10000,
 
 def plot_dependence(shap_values, X_test, x_feature='Rooms',
                     y_features=['SEI', 'Distance', 'Status'],
-                    alpha=0.7, cmap=None,
+                    alpha=0.7, cmap=None, units='pct_change',
                     plot_size=1.5, fontsize=16):
     import shap
     import matplotlib.pyplot as plt
@@ -338,6 +343,8 @@ def plot_dependence(shap_values, X_test, x_feature='Rooms',
     X['New'] = X['New'].map(new_dict)
     X = X.rename({'New': 'Status'}, axis=1)
     shap_values = shap_values.rename({'New': 'Status'}, axis=1)
+    if units == 'pct_change':
+        shap_values = shap_values.apply(pct_change)
     for i, y in enumerate(y_features):
         y_new = add_units_dict.get(y, y)
         shap.dependence_plot(x_feature, shap_values.values, X, x_jitter=1,
@@ -347,8 +354,11 @@ def plot_dependence(shap_values, X_test, x_feature='Rooms',
         # axes[i].set_xlabel(axes[i].get_xlabel(), fontsize=fontsize)
         # axes[i].tick_params(labelsize=fontsize)
         axes[i].grid(True)
-    [ax.set_xlabel(ax.get_xlabel(), fontsize=fontsize) for ax in fig.axes]
+        if units == 'pct_change':
+            la = 'Price change\nfor {} [%]'.format(x_feature)
+            axes[i].set_ylabel(la)
     [ax.set_ylabel(ax.get_ylabel(), fontsize=fontsize) for ax in fig.axes]
+    [ax.set_xlabel(ax.get_xlabel(), fontsize=fontsize) for ax in fig.axes]
     [ax.tick_params(labelsize=fontsize) for ax in fig.axes]
     [ax.yaxis.set_major_locator(tck.MaxNLocator(5)) for ax in fig.axes]
     fig.tight_layout()
@@ -356,7 +366,7 @@ def plot_dependence(shap_values, X_test, x_feature='Rooms',
 
 
 def plot_summary_shap_values(shap_values, X_test, alpha=0.7, cmap=None,
-                             plot_size=1.5, fontsize=16):
+                             plot_size=1.5, fontsize=16, units='pct_change'):
     import shap
     import seaborn as sns
     import matplotlib.pyplot as plt
@@ -364,7 +374,8 @@ def plot_summary_shap_values(shap_values, X_test, alpha=0.7, cmap=None,
     X_test = X_test.rename(short_plot_names, axis=1)
     X_test = X_test.rename({'New': 'Status'}, axis=1)
     shap_values = shap_values.rename(short_plot_names, axis=1)
-
+    if units == 'pct_change':
+        shap_values = shap_values.apply(pct_change)
     if cmap is None:
         shap.summary_plot(shap_values.values, X_test, alpha=alpha, plot_size=plot_size)
     else:
@@ -381,7 +392,10 @@ def plot_summary_shap_values(shap_values, X_test, alpha=0.7, cmap=None,
         [ax.tick_params(labelsize=fontsize) for ax in fig.axes]
     else:
         fig, ax = plt.gcf(), plt.gca()
-        ax.set_xlabel(ax.get_xlabel(), fontsize=fontsize)
+        if units == 'pct_change':
+            ax.set_xlabel('Price change [%]', fontsize=fontsize)
+        else:
+            ax.set_xlabel(ax.get_xlabel(), fontsize=fontsize)
         ax.set_ylabel(ax.get_ylabel(), fontsize=fontsize)
         ax.tick_params(labelsize=fontsize)
         cb = fig.axes[-1]
@@ -397,7 +411,8 @@ def select_years_interaction_term(ds, regressor='SEI'):
     return ds
 
 
-def produce_RF_abs_SHAP_all_years(path=ml_path, plot=True, mlr_shap=None):
+def produce_RF_abs_SHAP_all_years(path=ml_path, plot=True, mlr_shap=None,
+                                  units=None):
     import xarray as xr
     import numpy as np
     import pandas as pd
@@ -429,6 +444,8 @@ def produce_RF_abs_SHAP_all_years(path=ml_path, plot=True, mlr_shap=None):
         abs_shap = abs_shap[abs_shap['Predictor']!='Rooms']
         abs_shap['Predictor'] = abs_shap['Predictor'].map(plot_names)
         abs_shap['SHAP_abs'] *= np.sign(abs_shap['Corr'])
+        if units == 'pct_change':
+            abs_shap['SHAP_abs'] = abs_shap['SHAP_abs'].apply(pct_change)
         order = ['Social-Economic Index', 'Building rate', 'Distance to ECs']
         if mlr_shap is not None:
             sns.lineplot(data=abs_shap, x='year', y='SHAP_abs', hue='Predictor',
@@ -438,12 +455,15 @@ def produce_RF_abs_SHAP_all_years(path=ml_path, plot=True, mlr_shap=None):
             sns.lineplot(data=abs_shap, x='year', y='SHAP_abs', hue='Predictor',
                          ax=ax, palette='Dark2', ci='sd', markers=True, linewidth=2,
                          hue_order=order, markersize=10)
-        ax.set_ylabel("mean SHAP Values")
+        if units == 'pct_change':
+            ax.set_ylabel('Price change [%]')
+        else:
+            ax.set_ylabel("mean SHAP Values")
         ax.set_xlabel('')
         ax.grid(True)
-        h, l =ax.get_legend_handles_labels()
+        h, la = ax.get_legend_handles_labels()
         ax.legend_.remove()
-        ax.legend(h, l, ncol=2, loc='center')
+        ax.legend(h, la, ncol=2, loc='center')
         sns.despine(fig)
         fig.tight_layout()
     return abs_shap
