@@ -3,6 +3,7 @@
 """
 Created on Fri Jul  2 15:41:04 2021
 Run MLR hedonic with run_MLR_on_all_years(features=best1)
+use plot_price_rooms_new_from_new_ds for time_series new rooms MLR
 For RF, HP tuning :
 
 Run RF with
@@ -73,7 +74,7 @@ plot_names = {'Floor_number': 'Floor',
 
 short_plot_names = {'Total_ends': 'BR',
                     'mean_distance_to_28_mokdim': 'Distance',
-                    'SEI': 'SEI'}
+                    'SEI': 'SEI', 'New': 'Old/New'}
 
 add_units_dict = {'Distance': 'Distance [km]', 'BR': r'BR [Apts$\cdot$yr$^{-1}$]',
                   'Netflow': r'Netflow [people$\cdot$yr$^{-1}$]'}
@@ -165,26 +166,32 @@ def plot_rooms_area_distribution(df, units='m2'):
     return fig
 
 
-def plot_RF_time_series(X_ts, normalize_to_us_dollars=4):
+def plot_RF_time_series(X_ts, units='nis'):
     """plot rooms new time series from RF model"""
     import seaborn as sns
     import matplotlib.pyplot as plt
     import pandas as pd
+    from cbs_procedures import read_mean_salary
     sns.set_theme(style='ticks', font_scale=1.8)
     fig, ax = plt.subplots(figsize=(17, 10))
     X_ts = X_ts[X_ts['Rooms'].isin([3, 4, 5])]
     X_ts['Rooms'] = X_ts['Rooms'].astype(int)
-    X_ts = X_ts.rename({'New': 'Status'}, axis=1)
-    X_ts['Status'][X_ts['Status']==0] = 'Old'
-    X_ts['Status'][X_ts['Status']==1] = 'New'
-    if normalize_to_us_dollars is not None:
-        X_ts['Price'] /= normalize_to_us_dollars * 1000
+    X_ts = X_ts.rename({'New': 'Old/New'}, axis=1)
+    X_ts['Old/New'][X_ts['Old/New']==0] = 'Old'
+    X_ts['Old/New'][X_ts['Old/New']==1] = 'New'
+    if units == 'dollar':
+        X_ts['Price'] /= 4 * 1000
         ylabel = 'Apartment Price [Thousands $]'
-    else:
+    elif units == 'nis':
         X_ts['Price'] /= 1e6
         ylabel = 'Apartment Price [millions NIS]'
+    elif units == 'salary':
+        sal = read_mean_salary().rename({'year': 'Year'}, axis=1)
+        X_ts = pd.merge(X_ts, sal, on='Year', how='inner')
+        X_ts['Price'] /= X_ts['mean_salary']
+        ylabel = 'Mean salary'
     X_ts['Year'] = pd.to_datetime(X_ts['Year'], format='%Y')
-    sns.lineplot(data=X_ts, x='Year', y='Price', hue='Rooms', style='Status',
+    sns.lineplot(data=X_ts, x='Year', y='Price', hue='Rooms', style='Old/New',
                  ax=ax, palette='tab10', markers=True, markersize=10)
     ax.set_ylabel(ylabel)
     ax.set_xlabel('')
@@ -284,7 +291,7 @@ def loop_over_RF_models_years(df, path=work_david/'ML', mode='score',
     #     return X_ts
 
 
-def load_all_yearls_shap_values(path=work_david/'ML'):
+def load_all_yearly_shap_values(path=work_david/'ML'):
     import numpy as np
     years = np.arange(2000, 2020, 1)
     svs = []
@@ -325,7 +332,7 @@ def load_shap_values(path=work_david/'ML', samples=10000,
 
 
 def plot_dependence(shap_values, X_test, x_feature='Rooms',
-                    y_features=['SEI', 'Distance', 'Status'],
+                    y_features=['SEI', 'Distance', 'Old/New'],
                     alpha=0.7, cmap=None, units='pct_change',
                     plot_size=1.5, fontsize=16):
     import shap
@@ -338,11 +345,11 @@ def plot_dependence(shap_values, X_test, x_feature='Rooms',
     X = X.rename(short_plot_names, axis=1)
     shap_values = shap_values.rename(short_plot_names, axis=1)
     X = X.rename(add_units_dict, axis=1)
-    X['New'] = X['New'].astype(int)
+    X['Old/New'] = X['Old/New'].astype(int)
     new_dict = {0: 'Old', 1: 'New'}
-    X['New'] = X['New'].map(new_dict)
-    X = X.rename({'New': 'Status'}, axis=1)
-    shap_values = shap_values.rename({'New': 'Status'}, axis=1)
+    X['Old/New'] = X['Old/New'].map(new_dict)
+    # X = X.rename({'New': 'Status'}, axis=1)
+    # shap_values = shap_values.rename({'New': 'Old/New'}, axis=1)
     if units == 'pct_change':
         shap_values = shap_values.apply(pct_change)
     for i, y in enumerate(y_features):
@@ -589,7 +596,8 @@ def plot_Tree_explainer_shap(rf_model, X_train, y_train, X_test, samples=1000):
 #     return mean, std
 
 
-def produce_rooms_new_years_from_ds_var(ds, dsvar='beta_coef', new_cat='Status',new='New', old='Old'):
+def produce_rooms_new_years_from_ds_var(ds, dsvar='beta_coef', new_cat='Old/New',
+                                        new='New', old='Old'):
     import numpy as np
     import pandas as pd
     df = ds[dsvar].to_dataset('year').to_dataframe().T
@@ -630,11 +638,12 @@ def produce_rooms_new_years_from_ds_var(ds, dsvar='beta_coef', new_cat='Status',
 
 
 def plot_price_rooms_new_from_new_ds(ds, add_cbs_index=False,
-                                     normalize_to_us_dollars=4):
+                                     units='nis'):
     import seaborn as sns
     import matplotlib.pyplot as plt
     import pandas as pd
     from cbs_procedures import read_apt_price_index
+    from cbs_procedures import read_mean_salary
     sns.set_theme(style='ticks', font_scale=1.8)
     fig, ax = plt.subplots(figsize=(17, 10))
     beta = produce_rooms_new_years_from_ds_var(ds, 'beta_coef')
@@ -642,15 +651,20 @@ def plot_price_rooms_new_from_new_ds(ds, add_cbs_index=False,
     lower = produce_rooms_new_years_from_ds_var(ds, 'CI_95_lower')
     df = pd.concat([lower, beta, upper], axis=0)
 
-    if normalize_to_us_dollars is not None:
+    if units == 'dollar':
         # approx 4 NIS to 1 $ in whole 2000-2019
-        df['Price'] /= normalize_to_us_dollars * 1000  # price in thousands of $
+        df['Price'] /= 4 * 1000  # price in thousands of $
         ylabel = 'Apartment Price [Thousands $]'
-    else:
+    elif units == 'nis':
         ylabel = 'Apartment Price [millions NIS]'
         df['Price'] /= 1e6
+    elif units == 'salary':
+        sal = read_mean_salary()
+        df = pd.merge(df, sal, on='year', how='inner')
+        df['Price'] /= df['mean_salary']
+        ylabel = 'Mean salary'
     df['year'] = pd.to_datetime(df['year'], format='%Y')
-    sns.lineplot(data=df, x='year', y='Price', hue='Rooms', style='Status',
+    sns.lineplot(data=df, x='year', y='Price', hue='Rooms', style='Old/New',
                  ax=ax, palette='tab10', ci='sd', markers=True, markersize=10)
     ax.set_ylabel(ylabel)
     ax.set_xlabel('')
