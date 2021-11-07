@@ -64,7 +64,7 @@ plot_names = {'Floor_number': 'Floor',
               'distance_to_nearest_school': 'Nearest school',
               'Total_ends': 'Building rate',
               'mean_distance_to_28_mokdim': 'Distance to ECs',
-              'SEI': 'Social-Economic Index',
+              'SEI': 'Socio-Economic Index',
               'SEI_value_2015': 'Social-Economic Index',
               'SEI_value_2017': 'Social-Economic Index',
               'Rooms': 'Rooms', 'Rooms_3': '3 Rooms', 'Rooms_5': '5 Rooms',
@@ -233,6 +233,7 @@ def loop_over_RF_models_years(df, path=work_david/'ML', mode='score',
     train_scores = []
     test_scores = []
     x_tests = []
+    fis = []
     # shaps = []
     for year in years:
         print(year)
@@ -268,6 +269,11 @@ def loop_over_RF_models_years(df, path=work_david/'ML', mode='score',
             filename = 'Nadlan_X_test_RF_{}.csv'.format(year)
             X_test.to_csv(path/filename, index=False)
             # x_tests.append(X_test.to_xarray().to_array('feature'))
+        elif mode == 'FI':
+            fi = pd.DataFrame(rf.feature_importances_).T
+            fi.columns = X_train.columns
+            fi['year'] = year
+            fis.append(fi)
     if mode == 'score':
         sc = pd.DataFrame(train_scores)
         sc.columns = ['train_r2']
@@ -277,6 +283,9 @@ def loop_over_RF_models_years(df, path=work_david/'ML', mode='score',
     elif mode == 'time-series':
         X_ts = pd.concat(x_tests, axis=0)
         return X_ts
+    elif mode == 'FI':
+        FI = pd.concat(fis, axis=0)
+        return FI
     # elif mode == 'shap':
     #     sv_da = xr.concat(shaps, 'year')
     #     sv_da['year'] = years
@@ -425,7 +434,7 @@ def produce_RF_abs_SHAP_all_years(path=ml_path, plot=True, mlr_shap=None,
     import pandas as pd
     import seaborn as sns
     import matplotlib.pyplot as plt
-    SVs, X_tests = load_all_yearls_shap_values(path)
+    SVs, X_tests = load_all_yearly_shap_values(path)
     k2s = []
     for i, year in enumerate(np.arange(2000, 2020, 1)):
         shap_df = SVs[i]
@@ -453,7 +462,7 @@ def produce_RF_abs_SHAP_all_years(path=ml_path, plot=True, mlr_shap=None,
         abs_shap['SHAP_abs'] *= np.sign(abs_shap['Corr'])
         if units == 'pct_change':
             abs_shap['SHAP_abs'] = abs_shap['SHAP_abs'].apply(pct_change)
-        order = ['Social-Economic Index', 'Building rate', 'Distance to ECs']
+        order = ['Socio-Economic Index', 'Building rate', 'Distance to ECs']
         if mlr_shap is not None:
             sns.lineplot(data=abs_shap, x='year', y='SHAP_abs', hue='Predictor',
                          ax=ax, palette='Dark2', ci='sd', markers=True, linewidth=2,
@@ -637,6 +646,18 @@ def produce_rooms_new_years_from_ds_var(ds, dsvar='beta_coef', new_cat='Old/New'
     return dff
 
 
+def calculate_pct_change_for_long_ds_var(ds_var_long, year=2000):
+    d = ds_var_long.pivot(index='year', columns=[
+                          'Rooms', 'Old/New'], values='Price')
+    d_ref = d.loc[year]
+    d /= d_ref
+    d -= 1
+    d *= 100
+    d['year']=d.index
+    df = d.melt(id_vars=['year'],value_name='Price')
+    return df
+
+
 def plot_price_rooms_new_from_new_ds(ds, add_cbs_index=False,
                                      units='nis'):
     import seaborn as sns
@@ -649,6 +670,10 @@ def plot_price_rooms_new_from_new_ds(ds, add_cbs_index=False,
     beta = produce_rooms_new_years_from_ds_var(ds, 'beta_coef')
     upper = produce_rooms_new_years_from_ds_var(ds, 'CI_95_upper')
     lower = produce_rooms_new_years_from_ds_var(ds, 'CI_95_lower')
+    if units == 'pct_change':
+        beta = calculate_pct_change_for_long_ds_var(beta, 2000)
+        upper = calculate_pct_change_for_long_ds_var(upper, 2000)
+        lower = calculate_pct_change_for_long_ds_var(lower, 2000)
     df = pd.concat([lower, beta, upper], axis=0)
 
     if units == 'dollar':
@@ -663,6 +688,8 @@ def plot_price_rooms_new_from_new_ds(ds, add_cbs_index=False,
         df = pd.merge(df, sal, on='year', how='inner')
         df['Price'] /= df['mean_salary']
         ylabel = 'Mean salary'
+    elif units == 'pct_change':
+        ylabel = 'Apartment price change from 2000 [%]'
     df['year'] = pd.to_datetime(df['year'], format='%Y')
     sns.lineplot(data=df, x='year', y='Price', hue='Rooms', style='Old/New',
                  ax=ax, palette='tab10', ci='sd', markers=True, markersize=10)
@@ -672,10 +699,22 @@ def plot_price_rooms_new_from_new_ds(ds, add_cbs_index=False,
         cbs = read_apt_price_index(path=work_david, resample='AS',
                                    normalize_year=2000)
         cbs = cbs.loc['2000':'2019']
+        if units == 'pct_change':
+            cbs /= cbs.iloc[0]
+            cbs -= 1
+            cbs *= 100
+            cbs_label = 'Dwellings price index change from 2000 [%]'
         cbs.columns = ['Apartment Price Index']
         cbs['year'] = pd.to_datetime(cbs.index, format='%Y')
-        twin = ax.twinx()
-        sns.lineplot(data=cbs, x='year', y='Apartment Price Index', ax=twin, color='k', linewidth=2)
+        if units != 'pct_change':
+            twin = ax.twinx()
+        else:
+            twin = ax
+        sns.lineplot(data=cbs, x='year', y='Apartment Price Index', ax=twin,
+                     color='k', linewidth=2)
+        twin.set_ylabel('Dwellings Price Index')
+        twin.set_xlabel('')
+        twin.set_ylim(50, 300)
     ax.grid(True)
     sns.despine(fig)
     fig.tight_layout()
@@ -1530,21 +1569,27 @@ def read_and_run_FI_on_all_years(df, path=ml_path, pgrid='light'):
     return ds
 
 
-def plot_RF_FI_results(ds):
+def plot_RF_FI_results(fi):
+    """run loop over .. with mode='FI' first"""
     import pandas as pd
     import seaborn as sns
     import numpy as np
+    from matplotlib.ticker import MultipleLocator
     import matplotlib.pyplot as plt
-    sns.set_theme(style='ticks', font_scale=1.5)
+    sns.set_theme(style='ticks', font_scale=1.8)
+    cmap = sns.color_palette('Dark2', as_cmap=False, n_colors=len(fi.columns))
     fig, ax = plt.subplots(figsize=(17, 10))
-    df = ds['feature_importances'].mean(
-        'repeats').to_dataset('regressor').to_dataframe()
+    # df = ds['feature_importances'].mean(
+        # 'repeats').to_dataset('regressor').to_dataframe()
+    df = fi
     df = df * 100
-    df = df.rename(plot_names, axis=1)
+    df = df.rename(short_plot_names, axis=1)
+    # order the columns:
+    df = df[['Socio-Economic Index', 'Building rate', 'Distance to ECs', 'Rooms', 'Old/New']]
     df.index = pd.to_datetime(df.index, format='%Y')
     x = df.index
     ys = [df[x] for x in df.columns]
-    ax.stackplot(x, *ys, labels=[x for x in df.columns])
+    ax.stackplot(x, *ys, labels=[x for x in df.columns], colors=cmap)
     # df.plot(ax=ax, legend=False)
     ax.legend(loc='center', ncol=2, handleheight=0.1, labelspacing=0.01)
     # df_total = df.sum(axis=1)
@@ -1554,12 +1599,13 @@ def plot_RF_FI_results(ds):
     #                                          df[n], df_rel[n])):
     #         ax.text(cs - ab / 2, i, str(np.round(pc, 1)) + '%',
     #                  va = 'center', ha = 'center')
-    ax.set_ylabel('Feature importances [%]')
+    ax.set_ylabel('MDI predictor importances [%]')
     ax.grid(True)
+    ml = MultipleLocator(5)
+    ax.yaxis.set_minor_locator(ml)
+    # ax.tick_params(axis='y', which='minor')
     fig.tight_layout()
     return fig
-
-    return
 
 
 def run_CV_on_all_years(df, model_name='RF', savepath=ml_path, pgrid='normal',
