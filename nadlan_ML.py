@@ -668,6 +668,20 @@ def plot_price_rooms_new_from_new_ds(ds, add_cbs_index=False,
     sns.set_theme(style='ticks', font_scale=1.8)
     fig, ax = plt.subplots(figsize=(17, 10))
     beta = produce_rooms_new_years_from_ds_var(ds, 'beta_coef')
+    # calculate pct change between 2008 and 2019:
+    pct = (beta.loc[2019,'Price'].values-beta.loc[2008,'Price'].values)/beta.loc[2008,'Price'].values
+    pct *= 100
+    beta1 = beta.copy()
+    beta1.loc[2019, 'pct_change_2019_2008'] = pct
+    print(beta1.loc[2019])
+    # calculate pct change Old/New in 2008:
+    pct=(beta[beta['Old/New']=='New'].loc[2008,'Price']-beta[beta['Old/New']=='Old'].loc[2008,'Price'])/beta[beta['Old/New']=='Old'].loc[2008,'Price']        
+    pct *= 100
+    print(pct)
+    # calculate pct change Old/New in 2019:
+    pct=(beta[beta['Old/New']=='New'].loc[2019,'Price']-beta[beta['Old/New']=='Old'].loc[2019,'Price'])/beta[beta['Old/New']=='Old'].loc[2019,'Price']        
+    pct *= 100
+    print(pct)
     upper = produce_rooms_new_years_from_ds_var(ds, 'CI_95_upper')
     lower = produce_rooms_new_years_from_ds_var(ds, 'CI_95_lower')
     if units == 'pct_change':
