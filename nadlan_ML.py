@@ -5,8 +5,23 @@ Created on Fri Jul  2 15:41:04 2021
 Run MLR hedonic with run_MLR_on_all_years(features=best1)
 use plot_price_rooms_new_from_new_ds for time_series new rooms MLR
 For RF, HP tuning :
+run_CV_on_all_years(df,savepath=ml_path,model_name='RF', feats=best_rf2+['SEI'])
+Multifunction for RF results:
+loop_over_RF_models_years(df, path=work_david/'ML', mode='score',
+                          pgrid='normal'
+use mode = 'score' to calculate the R^2 for training and test
+use mode = 'time-series' to get the predictions.
+use mode = 'shap' to calculate the SHAP values for the test sets.(warning this takes longest)
+use mode = 'X_test' to get the test sets.
+use mode = 'FI' to get feature importances.
+then there are plot functions for RF and MLR:
+1) plot_RF_time_series(time-series)
+2) plot_RF_FI_results(fi)
+3) First, produce MLR SHAPS: svs=produce_shap_MLR_all_years(df)
+   then, produce_RF_abs_SHAP_all_years(path=ml_path/'RF_rooms_345',mlr_shap=svs)
+4)
 
-Run RF with
+
 @author: shlomi
 """
 from MA_paths import work_david
@@ -44,6 +59,10 @@ best_rf1 = ['SEI_value_2015', 'SEI_value_2017',
            'New', 'Sale_year', 'Rooms',
            'Total_ends', 'mean_distance_to_28_mokdim']
 
+best_rf2 = ['SEI_value_2015', 'SEI_value_2017',
+           'New', 'Sale_year', 'Rooms_345',
+           'Total_ends', 'mean_distance_to_28_mokdim']
+
 dummies = ['New', 'Rooms_4', 'Rooms_5']
 
 year_dummies = ['year_{}'.format(x) for x in np.arange(2001,2020)]
@@ -70,6 +89,7 @@ plot_names = {'Floor_number': 'Floor',
               'Rooms': 'Rooms', 'Rooms_3': '3 Rooms', 'Rooms_5': '5 Rooms',
               'Netflow': 'Net migration',
               'MISH': 'AHP',
+              'New': 'Old/New'
               }
 
 short_plot_names = {'Total_ends': 'BR',
@@ -85,7 +105,7 @@ def pct_change(x):
     import numpy as np
     return (np.exp(x)-1)*100
 
-    
+
 def plot_single_tree(rf_model, X_train, y_train, est_index=100, samples=10, max_depth=None):
     from sklearn import tree
     import matplotlib.pyplot as plt
@@ -111,7 +131,7 @@ def compare_r2_RF_MLR(sc, ds, mode='diagram'):
     import pandas as pd
     import seaborn as sns
     import matplotlib.pyplot as plt
-    sns.set_theme(style='ticks', font_scale=1.8)
+    sns.set_theme(style='ticks', font_scale=1.6)
     fig, ax = plt.subplots(figsize=(17, 10))
     df = ds['R-squared'].to_dataframe()
     df = pd.concat([df, sc], axis=1)
@@ -191,6 +211,7 @@ def plot_RF_time_series(X_ts, units='nis'):
         X_ts['Price'] /= X_ts['mean_salary']
         ylabel = 'Mean salary'
     X_ts['Year'] = pd.to_datetime(X_ts['Year'], format='%Y')
+    X_ts = X_ts.reset_index(drop=True)
     sns.lineplot(data=X_ts, x='Year', y='Price', hue='Rooms', style='Old/New',
                  ax=ax, palette='tab10', markers=True, markersize=10)
     ax.set_ylabel(ylabel)
@@ -224,7 +245,7 @@ def produce_shap_MLR_all_years(df, feats=best1, abs_val=True):
 
 
 def loop_over_RF_models_years(df, path=work_david/'ML', mode='score',
-                              pgrid='normal'):
+                              pgrid='normal', feats=best_rf2+['SEI']):
     import numpy as np
     import pandas as pd
     import shap
@@ -242,7 +263,7 @@ def loop_over_RF_models_years(df, path=work_david/'ML', mode='score',
         rf = gr.best_estimator_
         X_train, X_test, y_train, y_test = produce_X_y_RF_per_year(df,
                                                                    year=year,
-                                                                   verbose=0)
+                                                                   verbose=0, feats=feats)
         rf.fit(X_train, y_train)
         if mode == 'score':
             train_scores.append(rf.score(X_train, y_train))
@@ -341,9 +362,9 @@ def load_shap_values(path=work_david/'ML', samples=10000,
 
 
 def plot_dependence(shap_values, X_test, x_feature='Rooms',
-                    y_features=['SEI', 'Distance', 'Old/New'],
-                    alpha=0.7, cmap=None, units='pct_change',
-                    plot_size=1.5, fontsize=16):
+                    y_features=['Distance', 'SEI', 'BR'],
+                    alpha=0.5, cmap=None, units='pct_change',
+                    plot_size=1.5, fontsize=16, x_jitter=0.75):
     import shap
     import matplotlib.pyplot as plt
     import seaborn as sns
@@ -354,18 +375,25 @@ def plot_dependence(shap_values, X_test, x_feature='Rooms',
     X = X.rename(short_plot_names, axis=1)
     shap_values = shap_values.rename(short_plot_names, axis=1)
     X = X.rename(add_units_dict, axis=1)
-    X['Old/New'] = X['Old/New'].astype(int)
-    new_dict = {0: 'Old', 1: 'New'}
-    X['Old/New'] = X['Old/New'].map(new_dict)
-    # X = X.rename({'New': 'Status'}, axis=1)
-    # shap_values = shap_values.rename({'New': 'Old/New'}, axis=1)
+    # X['Old/New'] = X['Old/New'].astype(int)
+    # new_dict = {0: 'Old', 1: 'New'}
+    # X['Old/New'] = X['Old/New'].map(new_dict)
     if units == 'pct_change':
         shap_values = shap_values.apply(pct_change)
     for i, y in enumerate(y_features):
         y_new = add_units_dict.get(y, y)
-        shap.dependence_plot(x_feature, shap_values.values, X, x_jitter=1,
-                             dot_size=4, alpha=0.3, interaction_index=y_new,
+        shap.dependence_plot(x_feature, shap_values.values, X, x_jitter=x_jitter,
+                             dot_size=4, alpha=alpha, interaction_index=y_new,
                              ax=axes[i])
+        if 'Distance' in x_feature:
+            axes[i].set_xlim(25, 150)
+        cb = fig.axes[-1]
+        cbar = fig.colorbar(cb.collections[1], ax=axes[i],aspect=50, pad=0.05, label=y_new)
+        cb.remove()
+        # cbar.ax.set_yticklabels(['Low', 'High'], fontsize=fontsize)
+        # cbar.set_label('Predictor value')
+        cbar.outline.set_visible(False)
+
         # axes[i].set_ylabel(axes[i].get_ylabel(), fontsize=fontsize)
         # axes[i].set_xlabel(axes[i].get_xlabel(), fontsize=fontsize)
         # axes[i].tick_params(labelsize=fontsize)
@@ -386,9 +414,8 @@ def plot_summary_shap_values(shap_values, X_test, alpha=0.7, cmap=None,
     import shap
     import seaborn as sns
     import matplotlib.pyplot as plt
-    # sns.set_theme(style='ticks', font_scale=1.2)
+    sns.set_theme(style='ticks', font_scale=1.8)
     X_test = X_test.rename(short_plot_names, axis=1)
-    X_test = X_test.rename({'New': 'Status'}, axis=1)
     shap_values = shap_values.rename(short_plot_names, axis=1)
     if units == 'pct_change':
         shap_values = shap_values.apply(pct_change)
@@ -415,8 +442,15 @@ def plot_summary_shap_values(shap_values, X_test, alpha=0.7, cmap=None,
         ax.set_ylabel(ax.get_ylabel(), fontsize=fontsize)
         ax.tick_params(labelsize=fontsize)
         cb = fig.axes[-1]
-        cb.set_ylabel(cb.get_ylabel(), fontsize=fontsize)
-        cb.tick_params(labelsize=fontsize)
+        cbar = fig.colorbar(cb.collections[1], ticks=[0, 1],
+                                aspect=50, pad=0.05)
+        cb.remove()
+        cbar.ax.set_yticklabels(['Low', 'High'], fontsize=fontsize)
+        cbar.set_label('Predictor value')
+        cbar.ax.tick_params(size=0)
+        cbar.outline.set_visible(False)
+        # cb.set_ylabel(cb.get_ylabel(), fontsize=fontsize)
+        # cb.tick_params(labelsize=fontsize)
     fig.tight_layout()
     return fig
 
@@ -452,8 +486,9 @@ def produce_RF_abs_SHAP_all_years(path=ml_path, plot=True, mlr_shap=None,
             k2 = pd.concat([k2, k2_mlr], axis=0)
         k2s.append(k2)
     abs_shap = pd.concat(k2s, axis=0)
+    abs_shap = abs_shap.reset_index(drop=True)
     if plot:
-        sns.set_theme(style='ticks', font_scale=1.8)
+        sns.set_theme(style='ticks', font_scale=1.6)
         fig, ax = plt.subplots(figsize=(17, 10))
         abs_shap['year'] = pd.to_datetime(abs_shap['year'], format='%Y')
         abs_shap = abs_shap[abs_shap['Predictor']!='New']
@@ -675,11 +710,11 @@ def plot_price_rooms_new_from_new_ds(ds, add_cbs_index=False,
     beta1.loc[2019, 'pct_change_2019_2008'] = pct
     print(beta1.loc[2019])
     # calculate pct change Old/New in 2008:
-    pct=(beta[beta['Old/New']=='New'].loc[2008,'Price']-beta[beta['Old/New']=='Old'].loc[2008,'Price'])/beta[beta['Old/New']=='Old'].loc[2008,'Price']        
+    pct=(beta[beta['Old/New']=='New'].loc[2008,'Price']-beta[beta['Old/New']=='Old'].loc[2008,'Price'])/beta[beta['Old/New']=='Old'].loc[2008,'Price']
     pct *= 100
     print(pct)
     # calculate pct change Old/New in 2019:
-    pct=(beta[beta['Old/New']=='New'].loc[2019,'Price']-beta[beta['Old/New']=='Old'].loc[2019,'Price'])/beta[beta['Old/New']=='Old'].loc[2019,'Price']        
+    pct=(beta[beta['Old/New']=='New'].loc[2019,'Price']-beta[beta['Old/New']=='Old'].loc[2019,'Price'])/beta[beta['Old/New']=='Old'].loc[2019,'Price']
     pct *= 100
     print(pct)
     upper = produce_rooms_new_years_from_ds_var(ds, 'CI_95_upper')
@@ -1596,11 +1631,13 @@ def plot_RF_FI_results(fi):
     # df = ds['feature_importances'].mean(
         # 'repeats').to_dataset('regressor').to_dataframe()
     df = fi
-    df = df * 100
-    df = df.rename(short_plot_names, axis=1)
+    # df = df.reset_index(drop=True)
+    # df['year'] = df['year'].astype(str)
+    df.index = pd.to_datetime(df['year'], format='%Y')
+    df = df.rename(plot_names, axis=1)
     # order the columns:
     df = df[['Socio-Economic Index', 'Building rate', 'Distance to ECs', 'Rooms', 'Old/New']]
-    df.index = pd.to_datetime(df.index, format='%Y')
+    df *= 100
     x = df.index
     ys = [df[x] for x in df.columns]
     ax.stackplot(x, *ys, labels=[x for x in df.columns], colors=cmap)
@@ -1623,7 +1660,7 @@ def plot_RF_FI_results(fi):
 
 
 def run_CV_on_all_years(df, model_name='RF', savepath=ml_path, pgrid='normal',
-                        year=None, year_start=None):
+                        year=None, year_start=None, feats=best_rf2+['SEI']):
     import numpy as np
     if year is None:
         years = np.arange(2000, 2020, 1)
@@ -1632,7 +1669,7 @@ def run_CV_on_all_years(df, model_name='RF', savepath=ml_path, pgrid='normal',
         for year in years:
             if model_name == 'RF':
                 X_train, X_test, y_train, y_test = produce_X_y_RF_per_year(df,
-                                                                           year=year)
+                                                                           year=year, feats=feats)
             else:
                 X, y, scaler = produce_X_y(df, year=year, y_name='Price', plot_Xcorr=False,
                                            feats=features, dummy=None, scale_X=False)
@@ -1672,6 +1709,8 @@ def produce_X_y_RF_per_year(df, y_name='Price', feats=best_rf1+['SEI'],
             X = X.drop(['SEI_value_2015', 'SEI_value_2017'], axis=1)
     if 'Rooms' in X.columns:
         X = X[(X['Rooms'] >= 1) & (X['Rooms'] <= 6)]
+    if 'Rooms_345' in X.columns:
+        X = X.rename({'Rooms_345': 'Rooms'}, axis=1)
     y = df.loc[X.index, [y_name, 'Sale_year']]
     X = X.reset_index(drop=True)
     if 'New' in X.columns:
