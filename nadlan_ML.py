@@ -72,6 +72,8 @@ room_dummies = ['Rooms_4', 'Rooms_5']
 best_regular = ['SEI', 'Total_ends', 'mean_distance_to_28_mokdim', 'Netflow']
 best_regular1 = ['SEI', 'Total_ends', 'mean_distance_to_28_mokdim']
 
+general_features = ['Price', 'Rooms', 'Area_m2', 'New', 'Floor_number', 'Floors_In_Building',
+                    'Age', 'Total_ends', 'SEI', 'mean_distance_to_28_mokdim']
 
 apts = ['דירה', 'דירה בבית קומות']
 apts_more = apts + ["קוטג' דו משפחתי", "קוטג' חד משפחתי",
@@ -89,12 +91,12 @@ plot_names = {'Floor_number': 'Floor',
               'Rooms': 'Rooms', 'Rooms_3': '3 Rooms', 'Rooms_5': '5 Rooms',
               'Netflow': 'Net migration',
               'MISH': 'AHP',
-              'New': 'Old/New'
+              'New': 'Used/New'
               }
 
 short_plot_names = {'Total_ends': 'BR',
                     'mean_distance_to_28_mokdim': 'Distance',
-                    'SEI': 'SEI', 'New': 'Old/New'}
+                    'SEI': 'SEI', 'New': 'Used/New'}
 
 add_units_dict = {'Distance': 'Distance [km]', 'BR': r'BR [Apts$\cdot$yr$^{-1}$]',
                   'Netflow': r'Netflow [people$\cdot$yr$^{-1}$]'}
@@ -186,6 +188,26 @@ def plot_rooms_area_distribution(df, units='m2'):
     return fig
 
 
+def plot_general_features_corr_heatmap(df, feats=general_features, year=None):
+    import seaborn as sns
+    import matplotlib.pyplot as plt
+    sns.set_theme(style='ticks', font_scale=1.5)
+    fig, ax = plt.subplots(figsize=(17, 10))
+    if year is not None:
+        df = df[df['Sale_year']==year]
+        title = 'year = {}'.format(year)
+    else:
+        title = '2000 to 2019'
+    dff = df[feats]
+    dff = dff.rename(short_plot_names, axis=1)
+    g = sns.heatmap(dff.corr(),annot=True,cmap='coolwarm', ax=ax, center=0)
+    g.set_xticklabels(g.get_xticklabels(), rotation=45, ha='right')
+    fig.tight_layout()
+    fig.suptitle(title)
+    fig.subplots_adjust(top=0.945)
+    return fig
+
+
 def plot_RF_time_series(X_ts, units='nis'):
     """plot rooms new time series from RF model"""
     import seaborn as sns
@@ -196,9 +218,9 @@ def plot_RF_time_series(X_ts, units='nis'):
     fig, ax = plt.subplots(figsize=(17, 10))
     X_ts = X_ts[X_ts['Rooms'].isin([3, 4, 5])]
     X_ts['Rooms'] = X_ts['Rooms'].astype(int)
-    X_ts = X_ts.rename({'New': 'Old/New'}, axis=1)
-    X_ts['Old/New'][X_ts['Old/New']==0] = 'Old'
-    X_ts['Old/New'][X_ts['Old/New']==1] = 'New'
+    X_ts = X_ts.rename({'New': 'Used/New'}, axis=1)
+    X_ts['Used/New'][X_ts['Used/New']==0] = 'Used'
+    X_ts['Used/New'][X_ts['Used/New']==1] = 'New'
     if units == 'dollar':
         X_ts['Price'] /= 4 * 1000
         ylabel = 'Apartment Price [Thousands $]'
@@ -212,7 +234,7 @@ def plot_RF_time_series(X_ts, units='nis'):
         ylabel = 'Mean salary'
     X_ts['Year'] = pd.to_datetime(X_ts['Year'], format='%Y')
     X_ts = X_ts.reset_index(drop=True)
-    sns.lineplot(data=X_ts, x='Year', y='Price', hue='Rooms', style='Old/New',
+    sns.lineplot(data=X_ts, x='Year', y='Price', hue='Rooms', style='Used/New',
                  ax=ax, palette='tab10', markers=True, markersize=10)
     ax.set_ylabel(ylabel)
     ax.set_xlabel('')
@@ -363,7 +385,7 @@ def load_shap_values(path=work_david/'ML', samples=10000,
 
 def plot_dependence(shap_values, X_test, x_feature='Rooms',
                     y_features=['Distance', 'SEI', 'BR'],
-                    alpha=0.5, cmap=None, units='pct_change',
+                    alpha=0.2, cmap=None, units='pct_change',
                     plot_size=1.5, fontsize=16, x_jitter=0.75):
     import shap
     import matplotlib.pyplot as plt
@@ -388,7 +410,12 @@ def plot_dependence(shap_values, X_test, x_feature='Rooms',
         if 'Distance' in x_feature:
             axes[i].set_xlim(25, 150)
         cb = fig.axes[-1]
-        cbar = fig.colorbar(cb.collections[1], ax=axes[i],aspect=50, pad=0.05, label=y_new)
+        mapp = cb.collections[1]
+        fig.canvas.draw()
+        cbar = fig.colorbar(mapp, ax=axes[i],aspect=50, pad=0.05,
+                            label=y_new)
+        cbar.set_alpha(0.85)
+        cbar.draw_all()
         cb.remove()
         # cbar.ax.set_yticklabels(['Low', 'High'], fontsize=fontsize)
         # cbar.set_label('Predictor value')
@@ -640,8 +667,8 @@ def plot_Tree_explainer_shap(rf_model, X_train, y_train, X_test, samples=1000):
 #     return mean, std
 
 
-def produce_rooms_new_years_from_ds_var(ds, dsvar='beta_coef', new_cat='Old/New',
-                                        new='New', old='Old'):
+def produce_rooms_new_years_from_ds_var(ds, dsvar='beta_coef', new_cat='Used/New',
+                                        new='New', old='Used'):
     import numpy as np
     import pandas as pd
     df = ds[dsvar].to_dataset('year').to_dataframe().T
@@ -710,11 +737,11 @@ def plot_price_rooms_new_from_new_ds(ds, add_cbs_index=False,
     beta1.loc[2019, 'pct_change_2019_2008'] = pct
     print(beta1.loc[2019])
     # calculate pct change Old/New in 2008:
-    pct=(beta[beta['Old/New']=='New'].loc[2008,'Price']-beta[beta['Old/New']=='Old'].loc[2008,'Price'])/beta[beta['Old/New']=='Old'].loc[2008,'Price']
+    pct=(beta[beta['Used/New']=='New'].loc[2008,'Price']-beta[beta['Used/New']=='Used'].loc[2008,'Price'])/beta[beta['Used/New']=='Used'].loc[2008,'Price']
     pct *= 100
     print(pct)
     # calculate pct change Old/New in 2019:
-    pct=(beta[beta['Old/New']=='New'].loc[2019,'Price']-beta[beta['Old/New']=='Old'].loc[2019,'Price'])/beta[beta['Old/New']=='Old'].loc[2019,'Price']
+    pct=(beta[beta['Used/New']=='New'].loc[2019,'Price']-beta[beta['Used/New']=='Used'].loc[2019,'Price'])/beta[beta['Used/New']=='Used'].loc[2019,'Price']
     pct *= 100
     print(pct)
     upper = produce_rooms_new_years_from_ds_var(ds, 'CI_95_upper')
@@ -740,7 +767,8 @@ def plot_price_rooms_new_from_new_ds(ds, add_cbs_index=False,
     elif units == 'pct_change':
         ylabel = 'Apartment price change from 2000 [%]'
     df['year'] = pd.to_datetime(df['year'], format='%Y')
-    sns.lineplot(data=df, x='year', y='Price', hue='Rooms', style='Old/New',
+    df = df.reset_index(drop=True)
+    sns.lineplot(data=df, x='year', y='Price', hue='Rooms', style='Used/New',
                  ax=ax, palette='tab10', ci='sd', markers=True, markersize=10)
     ax.set_ylabel(ylabel)
     ax.set_xlabel('')
@@ -1636,7 +1664,7 @@ def plot_RF_FI_results(fi):
     df.index = pd.to_datetime(df['year'], format='%Y')
     df = df.rename(plot_names, axis=1)
     # order the columns:
-    df = df[['Socio-Economic Index', 'Building rate', 'Distance to ECs', 'Rooms', 'Old/New']]
+    df = df[['Socio-Economic Index', 'Building rate', 'Distance to ECs', 'Rooms', 'Used/New']]
     df *= 100
     x = df.index
     ys = [df[x] for x in df.columns]
