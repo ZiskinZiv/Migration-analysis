@@ -1668,7 +1668,7 @@ def plot_RF_FI_results(fi):
     df *= 100
     x = df.index
     ys = [df[x] for x in df.columns]
-    ax.stackplot(x, *ys, labels=[x for x in df.columns], colors=cmap)
+    ax.stackplot(x, *ys, labels=[x for x in df.columns], colors=cmap, alpha=0.6)
     # df.plot(ax=ax, legend=False)
     ax.legend(loc='center', ncol=2, handleheight=0.1, labelspacing=0.01)
     # df_total = df.sum(axis=1)
