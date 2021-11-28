@@ -720,6 +720,15 @@ def calculate_pct_change_for_long_ds_var(ds_var_long, year=2000):
     return df
 
 
+def calculate_period_pct_change_from_ds(ds, syear=2008, eyear=2019):
+    beta=produce_rooms_new_years_from_ds_var(ds,'beta_coef')
+    beta = beta.pivot(index='year', columns=['Rooms', 'Used/New'],
+                      values='Price')
+    beta.columns = ['{}-{}'.format(rooms, new) for rooms, new in beta.columns]
+    pct = 100 * (beta.loc[eyear] - beta.loc[syear]) / beta.loc[syear]
+    return pct
+
+
 def plot_price_rooms_new_from_new_ds(ds, add_cbs_index=False,
                                      units='nis'):
     import seaborn as sns
@@ -1716,8 +1725,35 @@ def run_CV_on_all_years(df, model_name='RF', savepath=ml_path, pgrid='normal',
     return
 
 
-def produce_X_y_RF_per_year(df, y_name='Price', feats=best_rf1+['SEI'],
-                            year=2000,
+def produce_rooms_new_price_table_for_all_years(df):
+    import numpy as np
+    import pandas as pd
+    pd.options.display.float_format = '{:,.2f}'.format
+    years = np.arange(2000, 2020, 1)
+    tabs = []
+    for year in years:
+        X, y=produce_X_y_RF_per_year(df, year=year, split=False)
+        X = X.join(y)
+        X['Price_nis'] = X['Price'].apply(np.exp)
+        tab = X['Rooms'].value_counts().to_frame().T
+        tab.index = [year]
+        tab.columns = ['3-rooms', '4-rooms', '5-rooms']
+        tab['New'] = X['New'].sum()
+        tab['Used'] = len(X) - tab['New']
+        tab['Total'] = len(X)
+        tab['Mean Price [10$^6$ NIS]'] = X['Price_nis'].mean().round(0)
+        tabs.append(tab)
+    dff = pd.concat(tabs, axis=0)
+    dff = dff.append(dff.sum(), ignore_index=True)
+    dff.index = [x for x in years] + ['Total']
+    for col in [x for x in dff.columns]:
+        dff[col] = dff.apply(lambda x: "{:,.0f}".format(x[col]), axis=1)
+    dff.iat[-1, -1] = '-'
+    return dff
+
+
+def produce_X_y_RF_per_year(df, y_name='Price', feats=best_rf2+['SEI'],
+                            year=2000, split=True,
                             test_size=0.1, verbose=1):
     from sklearn.model_selection import train_test_split
     import numpy as np
@@ -1749,6 +1785,8 @@ def produce_X_y_RF_per_year(df, y_name='Price', feats=best_rf1+['SEI'],
     y = y.apply(np.log)
     X = X.drop('Sale_year', axis=1)
     y = y.drop('Sale_year', axis=1)
+    if not split:
+        return X, y
     X_train, X_test, y_train, y_test = train_test_split(X, y,
                                                         test_size=test_size,
                                                         random_state=42)
