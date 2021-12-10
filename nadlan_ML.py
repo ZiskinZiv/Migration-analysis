@@ -4,6 +4,7 @@
 Created on Fri Jul  2 15:41:04 2021
 Run MLR hedonic with run_MLR_on_all_years(features=best1)
 use plot_price_rooms_new_from_new_ds for time_series new rooms MLR
+for standertized betas use plot_regular_feats_comparison_from_new_ds
 For RF, HP tuning :
 run_CV_on_all_years(df,savepath=ml_path,model_name='RF', feats=best_rf2+['SEI'])
 Multifunction for RF results:
@@ -98,8 +99,17 @@ short_plot_names = {'Total_ends': 'BR',
                     'mean_distance_to_28_mokdim': 'Distance',
                     'SEI': 'SEI', 'New': 'Used/New'}
 
+vars_plot_names = {'Total_ends': 'BR',
+                    'mean_distance_to_28_mokdim': 'DI',
+                    'SEI': 'SE', 'New': 'NE', 'Rooms': 'RM'}
+
+vars_explained_plot_names = {'Total_ends': 'BR (Building Rate)',
+                    'mean_distance_to_28_mokdim': 'DI (Distance to ECs)',
+                    'SEI': 'SE (Socio-Economic Index)', 'New': 'NE (Used/New)', 'Rooms': 'RM (# of Rooms)'}
+
 add_units_dict = {'Distance': 'Distance [km]', 'BR': r'BR [Apts$\cdot$yr$^{-1}$]',
                   'Netflow': r'Netflow [people$\cdot$yr$^{-1}$]'}
+add_units_dict_short = {'DI': 'DI [km]', 'BR': r'BR [Apts$\cdot$yr$^{-1}$]'}
 # AHP : Afforable Housing Program
 
 
@@ -108,19 +118,22 @@ def pct_change(x):
     return (np.exp(x)-1)*100
 
 
-def plot_single_tree(rf_model, X_train, y_train, est_index=100, samples=10, max_depth=None):
+def plot_single_tree(rf_model, X_train, y_train, est_index=100, samples=25, max_depth=2):
     from sklearn import tree
     import matplotlib.pyplot as plt
     import seaborn as sns
     import numpy as np
-    feats = ['Status', 'Rooms', 'BR', 'Distance', 'SEI']
-    sns.set_theme(font_scale=1.8)
+    # rf = RandomForestRegressor(max_depth=15,n_estimators=250)
+    # feats = ['Status', 'Rooms', 'BR', 'Distance', 'SEI']
+    X_train = X_train.rename(vars_plot_names, axis=1)
+    feats = ['NE', 'RM', 'BR', 'DI', 'SE']
+    # sns.set_theme(font_scale=1.8)
     fig, ax = plt.subplots(figsize=(17, 10))
     inds = X_train.sample(n=samples).index
     y_train = np.log(np.exp(y_train)/4)
     rf_model.fit(X_train.loc[inds], y_train.loc[inds])
-    _ = tree.plot_tree(rf_model[est_index],
-                       feature_names=feats, filled=True, ax=ax, max_depth=max_depth, fontsize=13)
+    _ = tree.plot_tree(rf_model[est_index],precision=2, fontsize=18, rounded=True,
+                       feature_names=feats, filled=True, ax=ax, max_depth=max_depth, proportion=False)
     filename = 'Nadlan_tree_example.png'
     plt.savefig(savefig_path / filename, bbox_inches='tight', pad_inches=0.1)
     return fig
@@ -383,8 +396,8 @@ def load_shap_values(path=work_david/'ML', samples=10000,
         return X_test, shap_values
 
 
-def plot_dependence(shap_values, X_test, x_feature='Rooms',
-                    y_features=['Distance', 'SEI', 'BR'],
+def plot_dependence(shap_values, X_test, x_feature='RM',
+                    y_features=['DI', 'SE', 'BR'],
                     alpha=0.2, cmap=None, units='pct_change',
                     plot_size=1.5, fontsize=16, x_jitter=0.75):
     import shap
@@ -394,21 +407,23 @@ def plot_dependence(shap_values, X_test, x_feature='Rooms',
     sns.set_theme(style='ticks', font_scale=1.2)
     fig, axes = plt.subplots(len(y_features), 1, sharex=True, figsize=(8, 10))
     X = X_test.copy()
-    X = X.rename(short_plot_names, axis=1)
-    shap_values = shap_values.rename(short_plot_names, axis=1)
-    X = X.rename(add_units_dict, axis=1)
+    X = X.rename(vars_plot_names, axis=1)
+    shap_values = shap_values.rename(vars_plot_names, axis=1)
+    X = X.rename(add_units_dict_short, axis=1)
     # X['Old/New'] = X['Old/New'].astype(int)
     # new_dict = {0: 'Old', 1: 'New'}
     # X['Old/New'] = X['Old/New'].map(new_dict)
     if units == 'pct_change':
         shap_values = shap_values.apply(pct_change)
     for i, y in enumerate(y_features):
-        y_new = add_units_dict.get(y, y)
+        y_new = add_units_dict_short.get(y, y)
         shap.dependence_plot(x_feature, shap_values.values, X, x_jitter=x_jitter,
                              dot_size=4, alpha=alpha, interaction_index=y_new,
                              ax=axes[i])
-        if 'Distance' in x_feature:
+        if 'DI' in x_feature:
             axes[i].set_xlim(25, 150)
+        if 'RM' in x_feature:
+            axes[i].set_xlabel('RM [# of rooms]')
         cb = fig.axes[-1]
         mapp = cb.collections[1]
         fig.canvas.draw()
@@ -442,8 +457,8 @@ def plot_summary_shap_values(shap_values, X_test, alpha=0.7, cmap=None,
     import seaborn as sns
     import matplotlib.pyplot as plt
     sns.set_theme(style='ticks', font_scale=1.8)
-    X_test = X_test.rename(short_plot_names, axis=1)
-    shap_values = shap_values.rename(short_plot_names, axis=1)
+    X_test = X_test.rename(vars_plot_names, axis=1)
+    shap_values = shap_values.rename(vars_plot_names, axis=1)
     if units == 'pct_change':
         shap_values = shap_values.apply(pct_change)
     if cmap is None:
@@ -520,11 +535,13 @@ def produce_RF_abs_SHAP_all_years(path=ml_path, plot=True, mlr_shap=None,
         abs_shap['year'] = pd.to_datetime(abs_shap['year'], format='%Y')
         abs_shap = abs_shap[abs_shap['Predictor']!='New']
         abs_shap = abs_shap[abs_shap['Predictor']!='Rooms']
-        abs_shap['Predictor'] = abs_shap['Predictor'].map(plot_names)
+        # order:
+        order = ['SE (Socio-Economic Index)', 'BR (Building Rate)', 'DI (Distance to ECs)']
+        abs_shap['Predictor'] = abs_shap['Predictor'].map(vars_explained_plot_names)
         abs_shap['SHAP_abs'] *= np.sign(abs_shap['Corr'])
         if units == 'pct_change':
             abs_shap['SHAP_abs'] = abs_shap['SHAP_abs'].apply(pct_change)
-        order = ['Socio-Economic Index', 'Building rate', 'Distance to ECs']
+        # order = ['Socio-Economic Index', 'Building rate', 'Distance to ECs']
         if mlr_shap is not None:
             sns.lineplot(data=abs_shap, x='year', y='SHAP_abs', hue='Predictor',
                          ax=ax, palette='Dark2', ci='sd', markers=True, linewidth=2,
@@ -536,7 +553,7 @@ def produce_RF_abs_SHAP_all_years(path=ml_path, plot=True, mlr_shap=None,
         if units == 'pct_change':
             ax.set_ylabel('Price change [%]')
         else:
-            ax.set_ylabel("mean SHAP Values")
+            ax.set_ylabel("mean |SHAP values|")
         ax.set_xlabel('')
         ax.grid(True)
         h, la = ax.get_legend_handles_labels()
@@ -808,7 +825,7 @@ def plot_price_rooms_new_from_new_ds(ds, add_cbs_index=False,
 
 
 def plot_regular_feats_comparison_from_new_ds(ds,reg_name='Predictor',
-                                              feats=best_regular1):
+                                              feats=best_regular1, units='pct_change'):
     import seaborn as sns
     import matplotlib.pyplot as plt
     import pandas as pd
@@ -828,13 +845,20 @@ def plot_regular_feats_comparison_from_new_ds(ds,reg_name='Predictor',
     dff['year'] = dff.index
     dfs.append(dff)
     dff = pd.concat(dfs, axis=0)
-    dff['regressor'] = dff['regressor'].map(plot_names)
+    dff['regressor'] = dff['regressor'].map(vars_explained_plot_names)
     dff = dff.rename({'regressor': reg_name}, axis=1)
     dff['year'] = pd.to_datetime(dff['year'], format='%Y')
+    dff = dff.reset_index(drop=True)
+    if units == 'pct_change':
+        dff['value'] = dff['value'].apply(pct_change)
     sns.lineplot(data=dff, x='year', y='value', hue=reg_name,
                  ax=ax, ci='sd', markers=True,
                  palette='Dark2')
-    ax.set_ylabel(r'Standardized $\beta$s')
+    if units == 'pct_change':
+        ylabel = 'Price change [%]'
+    else:
+        ylabel = r'Standardized $\beta$s'
+    ax.set_ylabel(ylabel)
     ax.set_xlabel('')
     h, l = ax.get_legend_handles_labels()
     ax.legend_.remove()
@@ -1667,13 +1691,15 @@ def plot_RF_FI_results(fi):
     fig, ax = plt.subplots(figsize=(17, 10))
     # df = ds['feature_importances'].mean(
         # 'repeats').to_dataset('regressor').to_dataframe()
-    df = fi
+    # order the features:
+    df = fi[['SEI', 'Total_ends', 'mean_distance_to_28_mokdim', 'Rooms', 'New', 'year']]
     # df = df.reset_index(drop=True)
     # df['year'] = df['year'].astype(str)
     df.index = pd.to_datetime(df['year'], format='%Y')
-    df = df.rename(plot_names, axis=1)
+    df = df.rename(vars_explained_plot_names, axis=1)
+    df = df.drop('year', axis=1)
     # order the columns:
-    df = df[['Socio-Economic Index', 'Building rate', 'Distance to ECs', 'Rooms', 'Used/New']]
+    # df = df[['Socio-Economic Index', 'Building rate', 'Distance to ECs', 'Rooms', 'Used/New']]
     df *= 100
     x = df.index
     ys = [df[x] for x in df.columns]
@@ -1723,6 +1749,16 @@ def run_CV_on_all_years(df, model_name='RF', savepath=ml_path, pgrid='normal',
                          savepath=savepath, verbose=0, n_jobs=-1, year=year)
 
     return
+
+
+def produce_employment_centers_table():
+    from cbs_procedures import read_emploment_centers_2008
+    df = read_emploment_centers_2008()
+    df['#'] = np.arange(1, 29)
+    df = df[['#', 'NameEN', 'Pop2020', 'latitude', 'longitude']]
+    df.columns = ['Name', 'Population in 2020', 'Latitude', 'Longitude']
+    print(df.to_latex(index=False))
+    return df
 
 
 def produce_rooms_new_price_table_for_all_years(df):
@@ -1929,24 +1965,9 @@ def produce_X_y(df, year=2015, y_name='Price', plot_Xcorr=True,
             dumm = dummies
     else:
         dumm = dummies
-    X = scale_log(X, cols=['Total_ends'], plus1_cols=[
-                  'Total_ends', 'Floor_number'])
-    # # scale Floor numbers:
-    # if 'Floor_number' in X.columns:
-    #     X['Floor_number'] = np.log(X['Floor_number']+1)
-    # if 'Total_ends' in X.columns:
-    #     X['Total_ends'] = np.log(X['Total_ends']+1)
-    # if any(X.columns.str.contains('mean_distance')):
-    #     col = X.loc[:, X.columns.str.contains('mean_distance')].columns[0]
-    #     X[col] = np.log(X[col])
-    # if 'distance_to_nearest_kindergarten' in X.columns:
-    #     X['distance_to_nearest_kindergarten'] = np.log(
-    #         X['distance_to_nearest_kindergarten'])
-    # if 'distance_to_nearest_school' in X.columns:
-    #     X['distance_to_nearest_school'] = np.log(X['distance_to_nearest_school'])
-    # if 'mean_distance_to_28_mokdim' in X.columns:
-    #     X['mean_distance_to_28_mokdim'] = np.log(X['mean_distance_to_28_mokdim'])
-    # X['Year_Built'] = np.log(X['Year_Built'])
+    # log scale building rates:
+    # X = scale_log(X, cols=['Total_ends'], plus1_cols=[
+    #               'Total_ends', 'Floor_number'])
     # if city_code col exist, drop it:
     if 'city_code' in X.columns:
         X = X.drop('city_code', axis=1)
