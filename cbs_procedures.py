@@ -299,7 +299,13 @@ def read_historic_SEI(path=work_david):
     return df
 
 
-def read_emploment_centers_2008(path=work_david, shape=True, plot=False):
+def sig_figures(x, N):
+    import numpy as np
+    return np.round(x, N - int(np.floor(np.log10(abs(x)))))
+
+
+def read_emploment_centers_2008(path=work_david, shape=True, plot=False,
+                                sig_round=True):
     import pandas as pd
     import geopandas as gpd
     import contextily as ctx
@@ -311,6 +317,16 @@ def read_emploment_centers_2008(path=work_david, shape=True, plot=False):
         df = df.to_crs(2039)
         df = df[~df['Pop2020'].isnull()]
         df.set_index('CityID', inplace=True)
+        df = df.sort_values('Pop2020', ascending=False)
+        df['latitude'] = df.to_crs(epsg='4036').geometry.y
+        df['longitude'] = df.to_crs(epsg='4036').geometry.x
+        df['latitude'] = df['latitude'].round(2)
+        df['longitude'] = df['longitude'].round(2)
+        # fix name:
+        ind = df[df['NameEN'].isna()].index
+        df.loc[ind, 'NameEN'] = 'UMM AL-FAHM'
+        if sig_figures:
+            df['Pop2020'] = df['Pop2020'].apply(sig_figures,N=1).astype(int)
         if plot:
             fig, ax = plt.subplots(figsize=(6, 10))
             gdf = df.to_crs(3857)
