@@ -22,6 +22,13 @@ then there are plot functions for RF and MLR:
    then, produce_RF_abs_SHAP_all_years(path=ml_path/'RF_rooms_345',mlr_shap=svs)
 4)
 
+how to produce weighted mean distance to ECs for all Israeli settelments:
+first load israeli settelment mid-points:
+gdf=geo_location_settelments_israel() (from cbs_procedures)
+then run calculate_distance_from_gdf_to_employment_centers:
+dis = calculate_distance_from_gdf_to_employment_centers(gdf,n=18, x_coord_name='X', y_coord_name='Y')
+finally save to csv:
+dis.to_csv(work_david/'Israel_settlments_with_mean_weighted_distance_to_ECs.csv', na_rep='NA',sep=',', index=False)
 
 @author: shlomi
 """
@@ -1004,11 +1011,12 @@ def get_design_with_pair_interaction(data, group_pair):
 
 
 def calculate_distance_from_gdf_to_employment_centers(gdf, path=work_david, n=4,
-                                                      weights='Pop2020', inverse=-1):
+                                                      weights='Pop2020', inverse=None,
+                                                      x_coord_name='ITM-E', y_coord_name='ITM-N'):
     from cbs_procedures import read_emploment_centers_2008
     import numpy as np
-    gdf = gdf[~gdf['ITM-E'].isnull()]
-    gdf = gdf[~gdf['ITM-N'].isnull()]
+    gdf = gdf[~gdf[x_coord_name].isnull()]
+    gdf = gdf[~gdf[y_coord_name].isnull()]
 
     def mean_distance_to_n_mokdim(x, weights=None):
         # x = gdf['geometry']
