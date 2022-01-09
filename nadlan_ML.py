@@ -172,7 +172,8 @@ def compare_r2_RF_MLR(sc, ds, mode='diagram'):
         ax.grid(True)
         sns.despine(fig)
         fig.tight_layout()
-
+    # for wide dataframe:
+    # df = df.pivot_table(columns=['Model'],values='R$^2$',index='year')
     return df
 
 
